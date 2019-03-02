@@ -7,15 +7,25 @@
 #include <errno.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
 #include <libbpf.h>
 #include <bpf.h>
-
+#include <signal.h>
 
 static int ifindex;
 
+static void cleanup_interface(void) {
+    bpf_set_link_xdp_fd(ifindex, -1, XDP_FLAGS_SKB_MODE);
+}
+
+static void int_exit(int sig) {
+    cleanup_interface();
+    exit(0);
+}
+
 int load_xdp_prog(const char *dir) {
-    char filename[128];
-    snprintf(filename, sizeof(filename), "%s_kern.o", dir);
+    const char *filename = "/etc/compressor/compressor_filter_kern.o";
 
     struct bpf_prog_load_attr prog_load_attr = {
         .prog_type = BPF_PROG_TYPE_XDP,
@@ -42,7 +52,13 @@ int load_xdp_prog(const char *dir) {
         return 1;
     }
 
-    if (bpf_set_link_xdp_fd(ifindex, prog_fd, XDP_FLAGS_DRV_MODE) < 0) {
+
+    signal(SIGINT, int_exit);
+    signal(SIGTERM, int_exit);
+    signal(SIGKILL, int_exit);
+    atexit(cleanup_interface);
+
+    if (bpf_set_link_xdp_fd(ifindex, prog_fd, XDP_FLAGS_SKB_MODE) < 0) {
         fprintf(stderr, "link set xdp failed\n");
         return 1;
     }
@@ -79,10 +95,16 @@ int main(int argc, char **argv) {
             return 1;
         }
 
-        return load_xdp_prog(argv[0]);
+        if ((res = load_xdp_prog(argv[0])) != 0) {
+            return res;
+        }
     } else {
         perror("Error reading configuration file");
         return 1;
+    }
+
+    while (1) {
+        sleep(2);
     }
     
     return 0;
