@@ -1,0 +1,6 @@
+{
+    "files.associations": {
+        "bpf.h": "c",
+        "ip.h": "c"
+    }
+}
