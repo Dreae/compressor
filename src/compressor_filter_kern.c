@@ -4,6 +4,7 @@
 #include <linux/ip.h>
 #include <linux/ipv6.h>
 #include <linux/udp.h>
+#include <linux/tcp.h>
 #include <linux/bpf_common.h>
 #include <stdint.h>
 
@@ -29,6 +30,20 @@ struct bpf_map_def SEC("maps") blocked_ips = {
     .key_size = sizeof(uint32_t),
     .value_size = sizeof(uint8_t),
     .max_entries = 1000000,
+};
+
+struct bpf_map_def SEC("maps") tcp_services = {
+    .type = BPF_MAP_TYPE_ARRAY,
+    .key_size = sizeof(uint32_t),
+    .value_size = sizeof(uint8_t),
+    .max_entries = 65536
+};
+
+struct bpf_map_def SEC("maps") udp_services = {
+    .type = BPF_MAP_TYPE_ARRAY,
+    .key_size = sizeof(uint32_t),
+    .value_size = sizeof(uint8_t),
+    .max_entries = 65536
 };
 
 SEC("xdp_prog")
@@ -58,14 +73,35 @@ int xdp_program(struct xdp_md *ctx) {
 
     if (h_proto == htons(ETH_P_IP)) {
         struct iphdr *iph = data + nh_off;
-        struct udphdr *udph = data + nh_off + sizeof(struct iphdr);
-        if (udph + 1 > (struct udphdr *)data_end) {
+        if(iph + 1 > (struct iphdr *)data_end) {
             return XDP_PASS;
         }
 
         uint8_t *value = bpf_map_lookup_elem(&blocked_ips, &iph->saddr);
-        if (value) {
+        if (value && *value) {
             return XDP_DROP;
+        }
+
+        if (iph->protocol == IPPROTO_UDP) {
+            struct udphdr *udph = data + nh_off + sizeof(struct iphdr);
+            if (udph + 1 > (struct udphdr *)data_end) {
+                return XDP_PASS;
+            }
+
+            value = bpf_map_lookup_elem(&udp_services, &udph->dest);
+            if (!value || !(*value)) {
+                return XDP_DROP;
+            }
+        } else if (iph->protocol == IPPROTO_TCP) {
+            struct tcphdr *tcph = data + nh_off + sizeof(struct iphdr);
+            if (tcph + 1 > (struct tcphdr *)data_end) {
+                return XDP_PASS;
+            }
+
+            value = bpf_map_lookup_elem(&tcp_services, &tcph->dest);
+            if (!value || !(*value)) {
+                return XDP_DROP;
+            }
         }
     }
 

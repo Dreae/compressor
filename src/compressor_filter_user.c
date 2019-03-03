@@ -16,7 +16,7 @@ static void int_exit(int sig) {
     exit(0);
 }
 
-int load_xdp_prog(void) {
+int load_xdp_prog(struct service_def **services) {
     const char *filename = "/etc/compressor/compressor_filter_kern.o";
 
     struct bpf_prog_load_attr prog_load_attr = {
@@ -34,11 +34,36 @@ int load_xdp_prog(void) {
     struct bpf_map *map;
     map = bpf_map__next(NULL, obj);
     if (!map) {
-        fprintf(stderr, "Error finding map in XDP program\n");
+        fprintf(stderr, "Error finding IP blacklist in XDP program\n");
         return 1;
     }
+    int ip_blacklist_fd = bpf_map__fd(map);
     
-    int map_fd = bpf_map__fd(map);
+    map = bpf_map__next(map, obj);
+    if (!map) {
+        fprintf(stderr, "Error finding TCP service map in XDP program\n");
+        return 1;
+    }
+    int tcp_service_fd = bpf_map__fd(map);
+
+    map = bpf_map__next(map, obj);
+    if (!map) {
+        fprintf(stderr, "Error finding UDP service map in XDP program\n");
+        return 1;
+    }
+    int udp_service_fd = bpf_map__fd(map);
+
+    struct service_def *service;
+    int idx = 0;
+    int enable = 1;
+    while ((service = services[idx]) != NULL) {
+        if (service->proto == PROTO_TCP) {
+            bpf_map_update_elem(tcp_service_fd, &service->port, &enable, BPF_NOEXIST);
+        } else if (service->proto == PROTO_UDP) {
+            bpf_map_update_elem(udp_service_fd, &service->port, &enable, BPF_NOEXIST);
+        }
+    }
+    
     if (!prog_fd) {
         perror("load_bpf_file");
         return 1;

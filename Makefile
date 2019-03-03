@@ -8,6 +8,7 @@ libbpf_objects += libbpf/src/libbpf.o libbpf/src/netlink.o libbpf/src/nlattr.o l
 CFLAGS += -Ilibbpf/src
 LDFLAGS += -lconfig -lelf
 
+all: compressor compressor_xdb
 compressor: libbpf $(objects)
 	clang $(LDFLAGS) -o compressor $(libbpf_objects) $(objects)
 compressor_xdb: src/compressor_filter_kern.o
@@ -17,4 +18,4 @@ libbpf:
 	$(MAKE) -C libbpf/src
 
 .PHONY: libbpf all
-.DEFAULT: compressor
+.DEFAULT: all
