@@ -5,7 +5,6 @@
 #include <linux/ipv6.h>
 #include <linux/udp.h>
 #include <linux/bpf_common.h>
-
 #include <stdint.h>
 
 #define SEC(NAME) __attribute__((section(NAME), used))
