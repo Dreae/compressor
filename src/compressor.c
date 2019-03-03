@@ -31,14 +31,14 @@ struct service_def *parse_service(const char *service) {
         return NULL;
     }
 
-    if (strcmp(proto, "tcp")) {
-        struct service_def *def = malloc(sizeof(struct service_def));
+    if (strcmp(proto, "tcp") == 0) {
+        struct service_def *def = calloc(1, sizeof(struct service_def));
         def->port = iport;
         def->proto = PROTO_TCP;
         
         return def;
-    } else if (strcmp(proto, "udp")) {
-        struct service_def *def = malloc(sizeof(struct service_def));
+    } else if (strcmp(proto, "udp") == 0) {
+        struct service_def *def = calloc(1, sizeof(struct service_def));
         def->port = iport;
         def->proto = PROTO_UDP;
 

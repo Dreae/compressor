@@ -71,8 +71,12 @@ int load_xdp_prog(struct service_def **services, struct config *cfg) {
         uint32_t dest = (uint32_t)service->port;
         if (service->proto == PROTO_TCP) {
             err = bpf_map_update_elem(tcp_service_fd, &dest, &enable, BPF_ANY);
+            printf("Adding service %d/tcp\n", dest);
         } else if (service->proto == PROTO_UDP) {
             err = bpf_map_update_elem(udp_service_fd, &dest, &enable, BPF_ANY);
+            printf("Adding service %d/udp\n", dest);
+        } else {
+            fprintf(stderr, "Got unknown service protocol %d\n", service->proto);
         }
 
         if (err) {

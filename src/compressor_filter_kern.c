@@ -12,6 +12,7 @@
 
 #define SEC(NAME) __attribute__((section(NAME), used))
 #define htons(x) ((__be16)___constant_swab16((x)))
+#define htonl(x) ((__be32)___constant_swab32((x)))
 static void *(*bpf_map_lookup_elem)(void *map, void *key) = (void *) BPF_FUNC_map_lookup_elem;
 
 struct vlan_hdr {
@@ -113,8 +114,9 @@ int xdp_program(struct xdp_md *ctx) {
                 return XDP_PASS;
             }
 
-            value = bpf_map_lookup_elem(&udp_services, &udph->dest);
-            if (!value || !(*value)) {
+            uint32_t dest = (uint32_t)htons(udph->dest);
+            value = bpf_map_lookup_elem(&udp_services, &dest);
+            if (value && *value == 0) {
                 return XDP_DROP;
             }
         } else if (iph->protocol == IPPROTO_TCP) {
@@ -123,8 +125,9 @@ int xdp_program(struct xdp_md *ctx) {
                 return XDP_PASS;
             }
 
-            value = bpf_map_lookup_elem(&tcp_services, &tcph->dest);
-            if (!value || !(*value)) {
+            uint32_t dest = (uint32_t)htons(tcph->dest);
+            value = bpf_map_lookup_elem(&tcp_services, &dest);
+            if (value && *value == 0) {
                 return XDP_DROP;
             }
         }

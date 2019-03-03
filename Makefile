@@ -16,6 +16,10 @@ compressor_xdb: src/compressor_filter_kern.o
 	llc -march=bpf -filetype=obj src/compressor_filter_kern.bc -o src/compressor_filter_kern.o
 libbpf:
 	$(MAKE) -C libbpf/src
+clean:
+	$(MAKE) -C libbpf/src clean
+	rm -f src/*.o src/*.bc
+	rm -f compressor
 
 .PHONY: libbpf all
 .DEFAULT: all

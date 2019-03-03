@@ -2,12 +2,10 @@
 
 #include <stdint.h>
 
-typedef enum service_proto {
-    PROTO_TCP,
-    PROTO_UDP
-} service_proto;
+#define PROTO_TCP 1
+#define PROTO_UDP 2
 
 struct service_def {
     uint16_t port;
-    service_proto proto;
+    uint8_t proto;
 };
