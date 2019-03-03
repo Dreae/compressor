@@ -8,6 +8,8 @@
 #include <linux/bpf_common.h>
 #include <stdint.h>
 
+#include "config.h"
+
 #define SEC(NAME) __attribute__((section(NAME), used))
 #define htons(x) ((__be16)___constant_swab16((x)))
 static void *(*bpf_map_lookup_elem)(void *map, void *key) = (void *) BPF_FUNC_map_lookup_elem;
@@ -46,6 +48,18 @@ struct bpf_map_def SEC("maps") udp_services = {
     .max_entries = 65536
 };
 
+struct bpf_map_def SEC("maps") config_map = {
+    .type = BPF_MAP_TYPE_ARRAY,
+    .key_size = sizeof(int),
+    .value_size = sizeof(struct config),
+    .max_entries = 1
+};
+
+static __always_inline int myself(void *hwaddr, struct config *cfg) {
+    uint16_t *saddr = hwaddr;
+    return saddr[0] == cfg->hw1 && saddr[1] == cfg->hw2 && saddr[2] == cfg->hw3;
+}
+
 SEC("xdp_prog")
 int xdp_program(struct xdp_md *ctx) {
     void *data_end = (void *)(long)ctx->data_end;
@@ -57,9 +71,16 @@ int xdp_program(struct xdp_md *ctx) {
         return XDP_PASS;
     }
 
+    struct config *cfg;
+    uint32_t key = 0;
+    cfg = bpf_map_lookup_elem(&config_map, &key);
+    if (!cfg) {
+        return XDP_ABORTED;
+    }
+
     uint16_t h_proto = eth->h_proto;
     for (int i = 0; i < 2; i++) {
-		if (h_proto == htons(ETH_P_8021Q) || h_proto == htons(ETH_P_8021AD)) {
+		if (__builtin_expect(h_proto == htons(ETH_P_8021Q) || h_proto == htons(ETH_P_8021AD), 0)) {
 			struct vlan_hdr *vhdr;
 
 			vhdr = data + nh_off;
@@ -71,7 +92,11 @@ int xdp_program(struct xdp_md *ctx) {
 		}
     }
 
-    if (h_proto == htons(ETH_P_IP)) {
+    if (myself(eth->h_source, cfg)) {
+        return XDP_PASS;
+    }
+
+    if (__builtin_expect(h_proto == htons(ETH_P_IP), 1)) {
         struct iphdr *iph = data + nh_off;
         if(iph + 1 > (struct iphdr *)data_end) {
             return XDP_PASS;

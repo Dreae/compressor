@@ -6,6 +6,7 @@
 #include <signal.h>
 #include <stdlib.h>
 #include "compressor_filter_user.h"
+#include "config.h"
 
 static void cleanup_interface(void) {
     bpf_set_link_xdp_fd(ifindex, -1, XDP_FLAGS_SKB_MODE);
@@ -16,7 +17,7 @@ static void int_exit(int sig) {
     exit(0);
 }
 
-int load_xdp_prog(struct service_def **services) {
+int load_xdp_prog(struct service_def **services, struct config *cfg) {
     const char *filename = "/etc/compressor/compressor_filter_kern.o";
 
     struct bpf_prog_load_attr prog_load_attr = {
@@ -53,6 +54,13 @@ int load_xdp_prog(struct service_def **services) {
     }
     int udp_service_fd = bpf_map__fd(map);
 
+    map = bpf_map__next(map, obj);
+    if (!map) {
+        fprintf(stderr, "Error finding config map in XDP program\n");
+        return 1;
+    }
+    int config_map_fd = bpf_map__fd(map);
+
     struct service_def *service;
     int idx = 0;
     int enable = 1;
@@ -65,6 +73,8 @@ int load_xdp_prog(struct service_def **services) {
 
         idx++;
     }
+    uint32_t key = 0;
+    bpf_map_update_elem(config_map_fd, &key, cfg, BPF_NOEXIST);
     
     if (!prog_fd) {
         perror("load_bpf_file");

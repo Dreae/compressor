@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include "compressor.h"
+#include "config.h"
 
 int ifindex;
 #include "compressor_filter_user.h"
@@ -45,6 +46,31 @@ struct service_def *parse_service(const char *service) {
         fprintf(stderr, "Invalid protocol defined for service %s\n", service);
         return NULL;
     }
+}
+
+int get_iface_mac_address(const char *interface, uint16_t *addr) {
+    char filename[256];
+    snprintf(filename, sizeof(filename), "/sys/class/net/%s/address", interface);
+    
+    FILE *fd = fopen(filename, "r");
+    if (!fd) {
+        perror("Error reading interface MAC address");
+        return 0;
+    }
+
+    uint8_t bytes[6];
+    int values[6];
+    if (fscanf(fd, "%x:%x:%x:%x:%x:%x%*c", &values[0], &values[1], &values[2], &values[3], &values[4], &values[5]) != 6) {
+        fprintf(stderr, "Unable to read MAC address for interface %s", interface);
+        return 0;
+    }
+
+    for (int i = 0; i < 6; i++) {
+        bytes[i] = (uint8_t)values[i];
+    }
+
+    memcpy(addr, bytes, 6);
+    return 1;
 }
 
 void free_array(void **array) {
@@ -105,7 +131,16 @@ int main(int argc, char **argv) {
             return 1;
         }
 
-        if ((res = load_xdp_prog(service_defs)) != 0) {
+        uint16_t hwaddr[3];
+        if (!get_iface_mac_address(interface, hwaddr)) {
+            return 1;
+        }
+        struct config cfg = { 0 };
+        cfg.hw1 = hwaddr[0];
+        cfg.hw2 = hwaddr[1];
+        cfg.hw3 = hwaddr[2];
+
+        if ((res = load_xdp_prog(service_defs, &cfg)) != 0) {
             return res;
         }
 
