@@ -62,6 +62,8 @@ int load_xdp_prog(struct service_def **services) {
         } else if (service->proto == PROTO_UDP) {
             bpf_map_update_elem(udp_service_fd, &service->port, &enable, BPF_NOEXIST);
         }
+
+        idx++;
     }
     
     if (!prog_fd) {

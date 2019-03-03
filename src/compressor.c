@@ -13,11 +13,16 @@ int ifindex;
 #include "compressor_filter_user.h"
 
 struct service_def *parse_service(const char *service) {
-    char *buffer = malloc(strlen(service));
+    char *buffer = malloc(strlen(service) + 1);
     strcpy(buffer, service);
 
-    char *proto = strtok(buffer, "/");
-    char *port = strtok(NULL, "/");
+    char *port = strtok(buffer, "/");
+    char *proto = strtok(NULL, "/");
+    if (port == NULL || proto == NULL) {
+        fprintf(stderr, "Error parsing service definition: %s\n", service);
+        return NULL;
+    }
+
     uint16_t iport = atoi(port);
     if (iport == 0) {
         fprintf(stderr, "Invalid port defined for service %s\n", service);
@@ -47,6 +52,7 @@ void free_array(void **array) {
     int idx = 0;
     while ((elem = array[idx]) != NULL) {
         free(elem);
+        idx++;
     }
 
     free(array);
@@ -88,10 +94,10 @@ int main(int argc, char **argv) {
                     service_defs[num_service] = def;
                     num_service++;
                 }
+
+                idx++;
             }
         }
-
-        free_array((void **)service_defs);
 
         ifindex = if_nametoindex(interface);
         if (!ifindex) {
@@ -102,6 +108,8 @@ int main(int argc, char **argv) {
         if ((res = load_xdp_prog(service_defs)) != 0) {
             return res;
         }
+
+        free_array((void **)service_defs);
     } else {
         perror("Error reading configuration file");
         return 1;
