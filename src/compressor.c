@@ -14,41 +14,6 @@
 int ifindex;
 #include "compressor_filter_user.h"
 
-struct service_def *parse_service(const char *service) {
-    char *buffer = malloc(strlen(service) + 1);
-    strcpy(buffer, service);
-
-    char *port = strtok(buffer, "/");
-    char *proto = strtok(NULL, "/");
-    if (port == NULL || proto == NULL) {
-        fprintf(stderr, "Error parsing service definition: %s\n", service);
-        return NULL;
-    }
-
-    uint16_t iport = atoi(port);
-    if (iport == 0) {
-        fprintf(stderr, "Invalid port defined for service %s\n", service);
-        return NULL;
-    }
-
-    if (strcmp(proto, "tcp") == 0) {
-        struct service_def *def = calloc(1, sizeof(struct service_def));
-        def->port = iport;
-        def->proto = PROTO_TCP;
-        
-        return def;
-    } else if (strcmp(proto, "udp") == 0) {
-        struct service_def *def = calloc(1, sizeof(struct service_def));
-        def->port = iport;
-        def->proto = PROTO_UDP;
-
-        return def;
-    } else {
-        fprintf(stderr, "Invalid protocol defined for service %s\n", service);
-        return NULL;
-    }
-}
-
 int get_iface_mac_address(const char *interface, uint16_t *addr) {
     char filename[256];
     snprintf(filename, sizeof(filename), "/sys/class/net/%s/address", interface);
@@ -110,9 +75,10 @@ int main(int argc, char **argv) {
         }
 
         config_setting_t *services = config_lookup(&config, "services");
-        struct service_def **service_defs = calloc(sizeof(struct service_def *), 65535 * 2);
-        int num_service = 0;
+        struct service_def **service_defs = calloc(65535 * 2, sizeof(struct service_def *));
         if (services) {
+            int num_service = 0;
+            
             const char *service;
             int idx = 0;
             while ((service = config_setting_get_string_elem(services, idx)) != NULL) {
@@ -120,6 +86,25 @@ int main(int argc, char **argv) {
                 if (def != NULL) {
                     service_defs[num_service] = def;
                     num_service++;
+                }
+
+                idx++;
+            }
+        }
+
+        config_setting_t *forwarding = config_lookup(&config, "srcds");
+        struct forwarding_rule **forwarding_rules = calloc(255, sizeof(struct forwarding_rule *));
+        if (forwarding) {
+            int num_rules = 0;
+
+            config_setting_t *config_rule;
+            int idx = 0;
+            while ((config_rule = config_setting_get_elem(forwarding, idx)) != NULL) {
+                struct forwarding_rule *fwd_rule = parse_forwarding_rule(config_rule);
+
+                if (fwd_rule) {
+                    forwarding_rules[num_rules] = fwd_rule;
+                    num_rules++;
                 }
 
                 idx++;
@@ -141,11 +126,13 @@ int main(int argc, char **argv) {
         cfg.hw2 = htons(hwaddr[1]);
         cfg.hw3 = htons(hwaddr[2]);
 
-        if ((res = load_xdp_prog(service_defs, &cfg)) != 0) {
+        if ((res = load_xdp_prog(service_defs, forwarding_rules, &cfg)) != 0) {
             return res;
         }
 
         free_array((void **)service_defs);
+        free_array((void **)forwarding_rules);
+        config_destroy(&config);
     } else {
         perror("Error reading configuration file");
         return 1;

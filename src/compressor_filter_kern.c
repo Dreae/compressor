@@ -29,7 +29,7 @@ struct bpf_map_def {
 };
 
 struct bpf_map_def SEC("maps") blocked_ips = {
-    .type = BPF_MAP_TYPE_PERCPU_ARRAY,
+    .type = BPF_MAP_TYPE_ARRAY,
     .key_size = sizeof(uint32_t),
     .value_size = sizeof(uint8_t),
     .max_entries = 1000000,
@@ -51,14 +51,38 @@ struct bpf_map_def SEC("maps") udp_services = {
 
 struct bpf_map_def SEC("maps") config_map = {
     .type = BPF_MAP_TYPE_ARRAY,
-    .key_size = sizeof(int),
+    .key_size = sizeof(uint32_t),
     .value_size = sizeof(struct config),
     .max_entries = 1
 };
 
-static __always_inline int myself(void *hwaddr, struct config *cfg) {
-    uint16_t *saddr = hwaddr;
-    return saddr[0] == cfg->hw1 && saddr[1] == cfg->hw2 && saddr[2] == cfg->hw3;
+struct bpf_map_def SEC("maps") forwarding_map = {
+    .type = BPF_MAP_TYPE_HASH,
+    .key_size = sizeof(uint32_t),
+    .value_size = sizeof(struct forwarding_rule),
+    .max_entries = 255
+};
+
+struct bpf_map_def SEC("maps") gateway_map = {
+    .type = BPF_MAP_TYPE_HASH,
+    .key_size = sizeof(uint32_t),
+    .value_size = sizeof(struct forwarding_rule),
+    .max_entries = 255
+};
+
+static __always_inline void swap_dest_src_hwaddr(void *data) {
+    uint16_t *p = data;
+    uint16_t dst[3];
+
+    dst[0] = p[0];
+    dst[1] = p[1];
+    dst[2] = p[2];
+    p[0] = p[3];
+    p[1] = p[4];
+    p[2] = p[5];
+    p[3] = dst[0];
+    p[4] = dst[1];
+    p[5] = dst[2];
 }
 
 SEC("xdp_prog")
@@ -93,10 +117,6 @@ int xdp_program(struct xdp_md *ctx) {
         }
     }
 
-    if (myself(eth->h_source, cfg)) {
-        return XDP_PASS;
-    }
-
     if (__builtin_expect(h_proto == htons(ETH_P_IP), 1)) {
         struct iphdr *iph = data + nh_off;
         if(iph + 1 > (struct iphdr *)data_end) {
@@ -114,6 +134,24 @@ int xdp_program(struct xdp_md *ctx) {
                 return XDP_PASS;
             }
 
+            struct forwarding_rule *rule;
+            rule = bpf_map_lookup_elem(&forwarding_map, &iph->daddr);
+            if (rule && rule->bind_port == htons(udph->dest)) {
+                iph->daddr = rule->to_addr;
+                udph->dest = rule->to_port;
+                swap_dest_src_hwaddr(data);
+
+                return XDP_TX;
+            }
+            rule = bpf_map_lookup_elem(&gateway_map, &iph->saddr);
+            if (rule && rule->to_port == htons(udph->source)) {
+                iph->saddr = rule->bind_addr;
+                udph->source = rule->bind_port;
+                swap_dest_src_hwaddr(data);
+
+                return XDP_TX;
+            } 
+            
             uint32_t dest = (uint32_t)htons(udph->dest);
             value = bpf_map_lookup_elem(&udp_services, &dest);
             if (value && *value == 0) {

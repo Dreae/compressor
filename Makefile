@@ -1,6 +1,6 @@
 CC = clang
 
-objects += src/compressor.o src/compressor_filter_user.o
+objects += src/compressor.o src/compressor_filter_user.o src/config.o
 
 libbpf_objects += libbpf/src/bpf.o libbpf/src/btf.o libbpf/src/libbpf_errno.o libbpf/src/libbpf_probes.o
 libbpf_objects += libbpf/src/libbpf.o libbpf/src/netlink.o libbpf/src/nlattr.o libbpf/src/str_error.o
@@ -20,6 +20,10 @@ clean:
 	$(MAKE) -C libbpf/src clean
 	rm -f src/*.o src/*.bc
 	rm -f compressor
+install:
+	mkdir -p /etc/compressor
+	cp compressor.example.conf /etc/compressor/compressor.conf
+	cp src/compressor_filter_kern.o /etc/compressor/compressor_filter_kern.o
 
 .PHONY: libbpf all
 .DEFAULT: all

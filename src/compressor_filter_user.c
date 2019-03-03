@@ -6,6 +6,7 @@
 #include <signal.h>
 #include <stdlib.h>
 #include <arpa/inet.h>
+#include <string.h>
 #include "compressor_filter_user.h"
 #include "config.h"
 
@@ -18,7 +19,7 @@ static void int_exit(int sig) {
     exit(0);
 }
 
-int load_xdp_prog(struct service_def **services, struct config *cfg) {
+int load_xdp_prog(struct service_def **services, struct forwarding_rule **forwarding, struct config *cfg) {
     const char *filename = "/etc/compressor/compressor_filter_kern.o";
 
     struct bpf_prog_load_attr prog_load_attr = {
@@ -62,6 +63,20 @@ int load_xdp_prog(struct service_def **services, struct config *cfg) {
     }
     int config_map_fd = bpf_map__fd(map);
 
+    map = bpf_map__next(map, obj);
+    if (!map) {
+        fprintf(stderr, "Error finding forwarding map in XDP program\n");
+        return 1;
+    }
+    int forwarding_rules_fd = bpf_map__fd(map);
+
+    map = bpf_map__next(map, obj);
+    if (!map) {
+        fprintf(stderr, "Error finding gateway map in XDP program\n");
+        return 1;
+    }
+    int gateway_rules_fd = bpf_map__fd(map);
+
     struct service_def *service;
     int idx = 0;
     uint8_t enable = 1;
@@ -81,6 +96,37 @@ int load_xdp_prog(struct service_def **services, struct config *cfg) {
 
         if (err) {
             fprintf(stderr, "Store service port failed: (err:%d)\n", err);
+            perror("bpf_map_update_elem");
+            return 1;
+        }
+
+        idx++;
+    }
+
+    struct forwarding_rule *rule;
+    idx = 0;
+    while ((rule = forwarding[idx]) != NULL) {
+        struct in_addr bind_addr;
+        bind_addr.s_addr = rule->bind_addr;
+        struct in_addr dest_addr;
+        dest_addr.s_addr = rule->to_addr;
+
+        char bind_str[32];
+        char dest_str[32];
+        strcpy(bind_str, inet_ntoa(bind_addr));
+        strcpy(dest_str, inet_ntoa(dest_addr));
+
+        printf("Adding forwarding rule %s:%d <--> %s:%d\n", bind_str, rule->bind_port, dest_str, rule->to_port);
+        err = bpf_map_update_elem(forwarding_rules_fd, &rule->bind_addr, rule, BPF_ANY);
+        if (err) {
+            fprintf(stderr, "Store forwarding rule failed: (err:%d)\n", err);
+            perror("bpf_map_update_elem");
+            return 1;
+        }
+
+        err = bpf_map_update_elem(gateway_rules_fd, &rule->to_addr, rule, BPF_ANY);
+        if (err) {
+            fprintf(stderr, "Store gateway rule failed: (err:%d)\n", err);
             perror("bpf_map_update_elem");
             return 1;
         }
