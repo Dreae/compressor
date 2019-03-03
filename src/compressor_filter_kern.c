@@ -15,8 +15,8 @@
 static void *(*bpf_map_lookup_elem)(void *map, void *key) = (void *) BPF_FUNC_map_lookup_elem;
 
 struct vlan_hdr {
-	__be16 h_vlan_TCI;
-	__be16 h_vlan_encapsulated_proto;
+    __be16 h_vlan_TCI;
+    __be16 h_vlan_encapsulated_proto;
 };
 
 struct bpf_map_def {
@@ -80,16 +80,16 @@ int xdp_program(struct xdp_md *ctx) {
 
     uint16_t h_proto = eth->h_proto;
     for (int i = 0; i < 2; i++) {
-		if (__builtin_expect(h_proto == htons(ETH_P_8021Q) || h_proto == htons(ETH_P_8021AD), 0)) {
-			struct vlan_hdr *vhdr;
+        if (__builtin_expect(h_proto == htons(ETH_P_8021Q) || h_proto == htons(ETH_P_8021AD), 0)) {
+            struct vlan_hdr *vhdr;
 
-			vhdr = data + nh_off;
-			nh_off += sizeof(struct vlan_hdr);
-			if (data + nh_off > data_end) {
-				return XDP_PASS;
-			}
-			h_proto = vhdr->h_vlan_encapsulated_proto;
-		}
+            vhdr = data + nh_off;
+            nh_off += sizeof(struct vlan_hdr);
+            if (data + nh_off > data_end) {
+                return XDP_PASS;
+            }
+            h_proto = vhdr->h_vlan_encapsulated_proto;
+        }
     }
 
     if (myself(eth->h_source, cfg)) {

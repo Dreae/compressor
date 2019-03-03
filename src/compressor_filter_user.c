@@ -5,6 +5,7 @@
 #include <bpf.h>
 #include <signal.h>
 #include <stdlib.h>
+#include <arpa/inet.h>
 #include "compressor_filter_user.h"
 #include "config.h"
 
@@ -63,18 +64,33 @@ int load_xdp_prog(struct service_def **services, struct config *cfg) {
 
     struct service_def *service;
     int idx = 0;
-    int enable = 1;
+    uint8_t enable = 1;
+
+    int err = 0;
     while ((service = services[idx]) != NULL) {
+        uint32_t dest = (uint32_t)service->port;
         if (service->proto == PROTO_TCP) {
-            bpf_map_update_elem(tcp_service_fd, &service->port, &enable, BPF_NOEXIST);
+            err = bpf_map_update_elem(tcp_service_fd, &dest, &enable, BPF_ANY);
         } else if (service->proto == PROTO_UDP) {
-            bpf_map_update_elem(udp_service_fd, &service->port, &enable, BPF_NOEXIST);
+            err = bpf_map_update_elem(udp_service_fd, &dest, &enable, BPF_ANY);
+        }
+
+        if (err) {
+            fprintf(stderr, "Store service port failed: (err:%d)\n", err);
+            perror("bpf_map_update_elem");
+            return 1;
         }
 
         idx++;
     }
+
     uint32_t key = 0;
-    bpf_map_update_elem(config_map_fd, &key, cfg, BPF_NOEXIST);
+    err = bpf_map_update_elem(config_map_fd, &key, cfg, BPF_ANY);
+    if (err) {
+        fprintf(stderr, "Store config failed: (err:%d)\n", err);
+        perror("bpf_map_update_elem");
+        return 1;
+    }
     
     if (!prog_fd) {
         perror("load_bpf_file");

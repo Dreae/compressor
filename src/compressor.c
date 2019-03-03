@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <string.h>
+#include <arpa/inet.h>
 
 #include "compressor.h"
 #include "config.h"
@@ -136,9 +137,9 @@ int main(int argc, char **argv) {
             return 1;
         }
         struct config cfg = { 0 };
-        cfg.hw1 = hwaddr[0];
-        cfg.hw2 = hwaddr[1];
-        cfg.hw3 = hwaddr[2];
+        cfg.hw1 = htons(hwaddr[0]);
+        cfg.hw2 = htons(hwaddr[1]);
+        cfg.hw3 = htons(hwaddr[2]);
 
         if ((res = load_xdp_prog(service_defs, &cfg)) != 0) {
             return res;
