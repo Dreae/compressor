@@ -7,7 +7,6 @@
 #include <linux/tcp.h>
 #include <linux/bpf_common.h>
 #include <stdint.h>
-#include <stdlib.h>
 
 #include "config.h"
 #include "reservation.h"
@@ -16,7 +15,7 @@
 #define htons(x) ((__be16)___constant_swab16((x)))
 #define htonl(x) ((__be32)___constant_swab32((x)))
 static void *(*bpf_map_lookup_elem)(void *map, void *key) = (void *) BPF_FUNC_map_lookup_elem;
-static void *(*bpf_map_update_elem)(void *map, void *key, void *value, int flags) BPF_FUNC_map_update_elem;
+static void *(*bpf_map_update_elem)(void *map, void *key, void *value, int flags) = (void *) BPF_FUNC_map_update_elem;
 
 struct vlan_hdr {
     __be16 h_vlan_TCI;
@@ -107,34 +106,36 @@ static __always_inline void update_iph_checksum(struct iphdr *iph) {
     iph->check = ~((csum & 0xffff) + (csum >> 16));
 }
 
+static __always_inline void update_udph_checksum(struct iphdr *iph, struct udphdr *udph, void *data, void *data_end) {
+    // TODO
+}
+
 static __always_inline struct port_reservation *generate_new_reservation(uint32_t sip, uint32_t ip, uint16_t port) {
-    struct port_reservation *reservation;
-    struct reverse_port_mapping *mapping;
     uint16_t sport;
     uint64_t key;
-
-    for (sport = 1; sport < 65535; sport++) {
+#pragma clang loop unroll(full)
+    for (sport = 50000; sport < 50064; sport++) {
         key = ip_port_to_key(sip, sport);
-        mapping = bpf_map_lookup_elem(&reverse_port_reservation, &key);
+        struct reverse_port_mapping *mapping = bpf_map_lookup_elem(&reverse_port_reservation, &key);
         if (!mapping) {
             break;
         }
     }
 
-    reservation = malloc(sizeof(struct port_reservation));
-    reservation->bind_port = sport;
-    reservation->age = 0;
-    reservation->credits = 200;
-    reservation->remote_addr = ip;
-    reservation->remote_port = port;
+    struct port_reservation reservation = { 0 };
+    reservation.bind_port = sport;
+    reservation.age = 0;
+    reservation.credits = 200;
+    reservation.remote_addr = ip;
+    reservation.remote_port = port;
 
-    mapping = malloc(sizeof(struct reverse_port_mapping));
-    mapping->reservation = key;
+    struct reverse_port_mapping mapping = { 0 };
+    mapping.reservation = key;
 
-    bpf_map_update_elem(&upd_port_reservation, &key, reservation, BPF_ANY);
-    bpf_map_update_elem(&reverse_port_reservation, &key, mapping, BPF_ANY);
+    bpf_map_update_elem(&reverse_port_reservation, &key, &mapping, BPF_ANY);
+    bpf_map_update_elem(&upd_port_reservation, &key, &reservation, BPF_ANY);
 
-    return reservation;
+    return bpf_map_lookup_elem(&upd_port_reservation, &key);
 }
 
 SEC("xdp_prog")
@@ -213,6 +214,7 @@ int xdp_program(struct xdp_md *ctx) {
                 udph->dest = htons(rule->to_port);
 
                 update_iph_checksum(iph);
+                update_udph_checksum(iph, udph, data, data_end);
 
                 swap_dest_src_hwaddr(data);
 
@@ -227,7 +229,8 @@ int xdp_program(struct xdp_md *ctx) {
                 mapping = bpf_map_lookup_elem(&reverse_port_reservation, &key);
                 if (mapping) {
                     struct port_reservation *reservation;
-                    reservation = bpf_map_lookup_elem(&upd_port_reservation, &mapping->reservation);
+                    uint64_t key = mapping->reservation;
+                    reservation = bpf_map_lookup_elem(&upd_port_reservation, &key);
                     if (!reservation) {
                         return XDP_DROP;
                     }
@@ -239,6 +242,7 @@ int xdp_program(struct xdp_md *ctx) {
                     udph->dest = htons(reservation->remote_port);
 
                     update_iph_checksum(iph);
+                    update_udph_checksum(iph, udph, data, data_end);
 
                     swap_dest_src_hwaddr(data);
 
