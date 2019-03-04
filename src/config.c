@@ -96,6 +96,8 @@ struct forwarding_rule *parse_forwarding_rule(config_setting_t *cfg_rule) {
     struct forwarding_rule *rule = malloc(sizeof(struct forwarding_rule));
     rule->bind_addr = bind_inet.s_addr;
     rule->bind_port = bind_port;
+    rule->source_addr = bind_inet.s_addr;
+    rule->source_port = bind_port;
     rule->to_addr = dest_inet.s_addr;
     rule->to_port = dest_port;
 

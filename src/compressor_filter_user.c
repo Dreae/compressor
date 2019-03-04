@@ -9,6 +9,7 @@
 #include <string.h>
 #include "compressor_filter_user.h"
 #include "config.h"
+#include "reservation.h"
 
 static void cleanup_interface(void) {
     bpf_set_link_xdp_fd(ifindex, -1, XDP_FLAGS_SKB_MODE);
@@ -70,13 +71,6 @@ int load_xdp_prog(struct service_def **services, struct forwarding_rule **forwar
     }
     int forwarding_rules_fd = bpf_map__fd(map);
 
-    map = bpf_map__next(map, obj);
-    if (!map) {
-        fprintf(stderr, "Error finding gateway map in XDP program\n");
-        return 1;
-    }
-    int gateway_rules_fd = bpf_map__fd(map);
-
     struct service_def *service;
     int idx = 0;
     uint8_t enable = 1;
@@ -117,16 +111,10 @@ int load_xdp_prog(struct service_def **services, struct forwarding_rule **forwar
         strcpy(dest_str, inet_ntoa(dest_addr));
 
         printf("Adding forwarding rule %s:%d <--> %s:%d\n", bind_str, rule->bind_port, dest_str, rule->to_port);
-        err = bpf_map_update_elem(forwarding_rules_fd, &rule->bind_addr, rule, BPF_ANY);
+        uint64_t key = ip_port_to_key(rule->bind_addr, rule->bind_port);
+        err = bpf_map_update_elem(forwarding_rules_fd, &key, rule, BPF_ANY);
         if (err) {
             fprintf(stderr, "Store forwarding rule failed: (err:%d)\n", err);
-            perror("bpf_map_update_elem");
-            return 1;
-        }
-
-        err = bpf_map_update_elem(gateway_rules_fd, &rule->to_addr, rule, BPF_ANY);
-        if (err) {
-            fprintf(stderr, "Store gateway rule failed: (err:%d)\n", err);
             perror("bpf_map_update_elem");
             return 1;
         }

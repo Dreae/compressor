@@ -12,6 +12,8 @@ struct config {
 struct forwarding_rule {
     uint32_t bind_addr;
     uint16_t bind_port;
+    uint32_t source_addr;
+    uint16_t source_port;
     uint32_t to_addr;
     uint16_t to_port;
 };
