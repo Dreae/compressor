@@ -9,13 +9,23 @@
 #include <stdint.h>
 
 #include "config.h"
-#include "reservation.h"
 
 #define SEC(NAME) __attribute__((section(NAME), used))
+
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
 #define htons(x) ((__be16)___constant_swab16((x)))
+#define ntohs(x) ((__be16)___constant_swab16((x)))
 #define htonl(x) ((__be32)___constant_swab32((x)))
+#define ntohl(x) ((__be32)___constant_swab32((x)))
+#elif __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+#define htons(x) (x)
+#define ntohs(X) (x)
+#define htonl(x) (x)
+#define ntohl(x) (x)
+#endif
+
 static void *(*bpf_map_lookup_elem)(void *map, void *key) = (void *) BPF_FUNC_map_lookup_elem;
-static void *(*bpf_map_update_elem)(void *map, void *key, void *value, int flags) = (void *) BPF_FUNC_map_update_elem;
+static int (*bpf_xdp_adjust_head)(void *ctx, int offset) = (void *) BPF_FUNC_xdp_adjust_head;
 
 struct vlan_hdr {
     __be16 h_vlan_TCI;
@@ -65,20 +75,6 @@ struct bpf_map_def SEC("maps") forwarding_map = {
     .max_entries = 255
 };
 
-struct bpf_map_def SEC("maps") upd_port_reservation = {
-    .type = BPF_MAP_TYPE_HASH,
-    .key_size = sizeof(uint64_t),
-    .value_size = sizeof(struct port_reservation),
-    .max_entries = 262140
-};
-
-struct bpf_map_def SEC("maps") reverse_port_reservation = {
-    .type = BPF_MAP_TYPE_HASH,
-    .key_size = sizeof(uint64_t),
-    .value_size = sizeof(struct reverse_port_mapping),
-    .max_entries = 262140
-};
-
 static __always_inline void swap_dest_src_hwaddr(void *data) {
     uint16_t *p = data;
     uint16_t dst[3];
@@ -108,34 +104,6 @@ static __always_inline void update_iph_checksum(struct iphdr *iph) {
 
 static __always_inline void update_udph_checksum(struct iphdr *iph, struct udphdr *udph, void *data, void *data_end) {
     // TODO
-}
-
-static __always_inline struct port_reservation *generate_new_reservation(uint32_t sip, uint32_t ip, uint16_t port) {
-    uint16_t sport;
-    uint64_t key;
-#pragma clang loop unroll(full)
-    for (sport = 50000; sport < 50064; sport++) {
-        key = ip_port_to_key(sip, sport);
-        struct reverse_port_mapping *mapping = bpf_map_lookup_elem(&reverse_port_reservation, &key);
-        if (!mapping) {
-            break;
-        }
-    }
-
-    struct port_reservation reservation = { 0 };
-    reservation.bind_port = sport;
-    reservation.age = 0;
-    reservation.credits = 200;
-    reservation.remote_addr = ip;
-    reservation.remote_port = port;
-
-    struct reverse_port_mapping mapping = { 0 };
-    mapping.reservation = key;
-
-    bpf_map_update_elem(&reverse_port_reservation, &key, &mapping, BPF_ANY);
-    bpf_map_update_elem(&upd_port_reservation, &key, &reservation, BPF_ANY);
-
-    return bpf_map_lookup_elem(&upd_port_reservation, &key);
 }
 
 SEC("xdp_prog")
@@ -188,68 +156,44 @@ int xdp_program(struct xdp_md *ctx) {
             }
 
             struct forwarding_rule *rule;
-            uint64_t key = ip_port_to_key(iph->daddr, htons(udph->dest));
             rule = bpf_map_lookup_elem(&forwarding_map, &key);
             if (rule) {
-                key = ip_port_to_key(iph->saddr, htons(udph->source));
-                struct port_reservation *existing_reservation;
-                existing_reservation = bpf_map_lookup_elem(&upd_port_reservation, &key);
-                if (existing_reservation) {
-                    if (existing_reservation->credits <= 0) {
-                        return XDP_DROP;
-                    }
-                } else {
-                    existing_reservation = generate_new_reservation(rule->source_addr, iph->saddr, htons(udph->source));
-                    if (!existing_reservation) {
-                        return XDP_ABORTED;
-                    }
+                // Rule found, add outer IP frame
+                if (bpf_xdp_adjust_head(ctx, 0 - (int)sizeof(struct iphdr))) {
+                    return XDP_ABORTED;
                 }
-                udph->source = existing_reservation->bind_port;
-                existing_reservation->credits--;
-                existing_reservation->age = 0;
 
-                iph->daddr = rule->to_addr;
-                iph->saddr = rule->bind_addr;
-                iph->ttl = 64;
-                udph->dest = htons(rule->to_port);
+                void *data_end = (void *)(long)ctx->data_end;
+                void *data = (void *)(long)ctx->data;
+                struct ethhdr *new_eth = data;
+                struct iphdr *new_iph = data + sizeof(struct ethhdr);
+                struct ethhdr *old_eth = data + sizeof(struct iphdr);
 
-                update_iph_checksum(iph);
-                update_udph_checksum(iph, udph, data, data_end);
+                // Ethernet header and IP header are the same size,
+                // move the Ethernet header to the front of the newly
+                // created space and add a new IP header in its place
+                __builtin_memcpy(new_eth, old_eth, sizeof(struct ethhdr));
+                new_iph->version = 4;
+                new_iph->ihl = sizeof(struct iphdr) >> 2;
+                new_iph->frag_off = 0;
+                new_iph->protocol = IPPROTO_IPIP;
+                new_iph->check = 0;
+                new_iph->ttl = 64;
+                new_iph->tos = 0;
+                new_iph->tot_len = htons(ntohs(iph->tot_len) + sizeof(struct iphdr));
+                new_iph->daddr = rule->to_addr;
+                new_iph->saddr = rule->source_addr;
+
+                update_iph_checksum(new_iph);
+
+                if (rule->bind_port != rule->to_port) {
+                    udph->dest = htons(rule->to_port);
+                    update_udph_checksum(iph, udph, data, data_end);
+                }
 
                 swap_dest_src_hwaddr(data);
 
                 return XDP_TX;
-            }
-
-            key = ip_port_to_key(iph->saddr, htons(udph->source));
-            rule = bpf_map_lookup_elem(&forwarding_map, &key);
-            if (rule) {
-                key = ip_port_to_key(iph->daddr, htons(udph->dest));
-                struct reverse_port_mapping *mapping;
-                mapping = bpf_map_lookup_elem(&reverse_port_reservation, &key);
-                if (mapping) {
-                    struct port_reservation *reservation;
-                    uint64_t key = mapping->reservation;
-                    reservation = bpf_map_lookup_elem(&upd_port_reservation, &key);
-                    if (!reservation) {
-                        return XDP_DROP;
-                    }
-
-                    iph->daddr = reservation->remote_addr;
-                    iph->saddr = rule->bind_addr;
-                    iph->ttl = 64;
-                    udph->source = htons(rule->bind_port);
-                    udph->dest = htons(reservation->remote_port);
-
-                    update_iph_checksum(iph);
-                    update_udph_checksum(iph, udph, data, data_end);
-
-                    swap_dest_src_hwaddr(data);
-
-                    return XDP_TX;
-                } else {
-                    return XDP_DROP;
-                }
             }
 
             uint32_t dest = (uint32_t)htons(udph->dest);
