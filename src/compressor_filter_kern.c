@@ -112,8 +112,7 @@ int xdp_program(struct xdp_md *ctx) {
     void *data = (void *)(long)ctx->data;
     struct ethhdr *eth = data;
 
-    uint64_t nh_off = sizeof(*eth);
-    if (data + nh_off > data_end) {
+    if (eth + 1 > (struct ethhdr *)data_end) {
         return XDP_PASS;
     }
 
@@ -124,22 +123,8 @@ int xdp_program(struct xdp_md *ctx) {
         return XDP_ABORTED;
     }
 
-    uint16_t h_proto = eth->h_proto;
-    for (int i = 0; i < 2; i++) {
-        if (__builtin_expect(h_proto == htons(ETH_P_8021Q) || h_proto == htons(ETH_P_8021AD), 0)) {
-            struct vlan_hdr *vhdr;
-
-            vhdr = data + nh_off;
-            nh_off += sizeof(struct vlan_hdr);
-            if (data + nh_off > data_end) {
-                return XDP_PASS;
-            }
-            h_proto = vhdr->h_vlan_encapsulated_proto;
-        }
-    }
-
-    if (__builtin_expect(h_proto == htons(ETH_P_IP), 1)) {
-        struct iphdr *iph = data + nh_off;
+    if (__builtin_expect(eth->h_proto == htons(ETH_P_IP), 1)) {
+        struct iphdr *iph = data + sizeof(struct ethhdr);
         if(iph + 1 > (struct iphdr *)data_end) {
             return XDP_PASS;
         }
@@ -150,13 +135,13 @@ int xdp_program(struct xdp_md *ctx) {
         }
 
         if (iph->protocol == IPPROTO_UDP) {
-            struct udphdr *udph = data + nh_off + sizeof(struct iphdr);
+            struct udphdr *udph = data + sizeof(struct ethhdr) + sizeof(struct iphdr);
             if (udph + 1 > (struct udphdr *)data_end) {
                 return XDP_PASS;
             }
 
             struct forwarding_rule *rule;
-            rule = bpf_map_lookup_elem(&forwarding_map, &key);
+            rule = bpf_map_lookup_elem(&forwarding_map, &iph->daddr);
             if (rule) {
                 // Rule found, add outer IP frame
                 if (bpf_xdp_adjust_head(ctx, 0 - (int)sizeof(struct iphdr))) {
@@ -168,6 +153,10 @@ int xdp_program(struct xdp_md *ctx) {
                 struct ethhdr *new_eth = data;
                 struct iphdr *new_iph = data + sizeof(struct ethhdr);
                 struct ethhdr *old_eth = data + sizeof(struct iphdr);
+                iph = data + sizeof(struct ethhdr) + sizeof(struct iphdr);
+                if (new_eth + 1 > (struct ethhdr *)data_end || old_eth + 1 > (struct ethhdr *)data_end || new_iph + 1 > (struct iphdr *)data_end || iph + 1 > (struct iphdr *)data_end) {
+                    return XDP_DROP;
+                }
 
                 // Ethernet header and IP header are the same size,
                 // move the Ethernet header to the front of the newly
@@ -186,6 +175,10 @@ int xdp_program(struct xdp_md *ctx) {
 
                 update_iph_checksum(new_iph);
 
+                udph = data + sizeof(struct ethhdr) + (2 * sizeof(struct iphdr));
+                if (udph + 1 > (struct udphdr *)data_end) {
+                    return XDP_DROP;
+                }
                 if (rule->bind_port != rule->to_port) {
                     udph->dest = htons(rule->to_port);
                     update_udph_checksum(iph, udph, data, data_end);
@@ -202,7 +195,7 @@ int xdp_program(struct xdp_md *ctx) {
                 return XDP_DROP;
             }
         } else if (iph->protocol == IPPROTO_TCP) {
-            struct tcphdr *tcph = data + nh_off + sizeof(struct iphdr);
+            struct tcphdr *tcph = data + sizeof(struct ethhdr) + sizeof(struct iphdr);
             if (tcph + 1 > (struct tcphdr *)data_end) {
                 return XDP_PASS;
             }
