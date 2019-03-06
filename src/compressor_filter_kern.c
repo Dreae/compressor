@@ -26,6 +26,8 @@
 
 static void *(*bpf_map_lookup_elem)(void *map, void *key) = (void *) BPF_FUNC_map_lookup_elem;
 static int (*bpf_xdp_adjust_head)(void *ctx, int offset) = (void *) BPF_FUNC_xdp_adjust_head;
+static int64_t (*bpf_csum_diff)(__be32 *from, uint32_t from_size, __be32 *to, uint32_t to_size, __wsum seed) = (void *) BPF_FUNC_csum_diff;
+static int (*bpf_map_update_elem)(void *map, void *key, const void *value, uint64_t flags) = (void *) BPF_FUNC_map_update_elem;
 
 struct vlan_hdr {
     __be16 h_vlan_TCI;
@@ -70,14 +72,14 @@ struct bpf_map_def SEC("maps") config_map = {
 
 struct bpf_map_def SEC("maps") forwarding_map = {
     .type = BPF_MAP_TYPE_HASH,
-    .key_size = sizeof(uint64_t),
+    .key_size = sizeof(uint32_t),
     .value_size = sizeof(struct forwarding_rule),
     .max_entries = 256
 };
 
 struct bpf_map_def SEC("maps") tunnel_map = {
     .type = BPF_MAP_TYPE_HASH,
-    .key_size = sizeof(uint64_t),
+    .key_size = sizeof(uint32_t),
     .value_size = sizeof(struct forwarding_rule),
     .max_entries = 256
 };
@@ -109,8 +111,9 @@ static __always_inline void update_iph_checksum(struct iphdr *iph) {
     iph->check = ~((csum & 0xffff) + (csum >> 16));
 }
 
-static __always_inline void update_udph_checksum(struct iphdr *iph, struct udphdr *udph, void *data, void *data_end) {
+static __always_inline void update_udph_checksum(struct iphdr *iph, struct udphdr *udph, void *data_end) {
     // TODO
+    udph->check = 0;
 }
 
 SEC("xdp_prog")
@@ -148,8 +151,7 @@ int xdp_program(struct xdp_md *ctx) {
             }
 
             struct forwarding_rule *rule;
-            uint64_t key = iph->daddr + ntohs(udph->dest);
-            rule = bpf_map_lookup_elem(&forwarding_map, &key);
+            rule = bpf_map_lookup_elem(&forwarding_map, &iph->daddr);
             if (rule) {
                 // Rule found, add outer IP frame
                 if (bpf_xdp_adjust_head(ctx, 0 - (int)sizeof(struct iphdr))) {
@@ -180,17 +182,20 @@ int xdp_program(struct xdp_md *ctx) {
                 new_iph->tot_len = htons(ntohs(iph->tot_len) + sizeof(struct iphdr));
                 new_iph->daddr = rule->to_addr;
                 new_iph->saddr = rule->source_addr;
-
                 update_iph_checksum(new_iph);
+
+                iph->daddr = rule->to_addr;
+                update_iph_checksum(iph);
 
                 udph = data + sizeof(struct ethhdr) + (2 * sizeof(struct iphdr));
                 if (udph + 1 > (struct udphdr *)data_end) {
                     return XDP_DROP;
                 }
-                if (rule->bind_port != rule->to_port) {
+                // Do port translation only if we know what the port is doing
+                if (ntohs(udph->dest) == rule->bind_port && rule->bind_port != rule->to_port) {
                     udph->dest = htons(rule->to_port);
-                    update_udph_checksum(iph, udph, data, data_end);
                 }
+                update_udph_checksum(iph, udph, data_end);
 
                 swap_dest_src_hwaddr(data);
 
@@ -223,10 +228,10 @@ int xdp_program(struct xdp_md *ctx) {
             // Save a copy of the eth header since it will
             // get dropped when we move the XDP data
             struct ethhdr old_eth;
-            __builtin_memcpy(&old_eth, data, sizeof(struct ethhdr));
+            __builtin_memcpy(&old_eth, eth, sizeof(struct ethhdr));
 
             // Remove outer IP frame
-            if (bpf_xdp_adjust_head(ctx, sizeof(struct iphdr))) {
+            if (bpf_xdp_adjust_head(ctx, (int)sizeof(struct iphdr))) {
                 return XDP_DROP;
             }
             data = (void *)(long)ctx->data;
@@ -234,23 +239,25 @@ int xdp_program(struct xdp_md *ctx) {
             struct ethhdr *new_eth = data;
             struct iphdr *inner_ip = data + sizeof(struct ethhdr);
 
-            // Since this is SRCDS specific we only support UDP
-            if (new_eth + 1 > (struct ethhdr *)data_end || inner_ip + 1 > (struct iphdr *)data_end || inner_ip->protocol != IPPROTO_UDP) {
+            if (new_eth + 1 > (struct ethhdr *)data_end || inner_ip + 1 > (struct iphdr *)data_end) {
                 return XDP_DROP;
             }
             __builtin_memcpy(new_eth, &old_eth, sizeof(struct ethhdr));
             swap_dest_src_hwaddr(data);
 
-            struct udphdr *udph = data + sizeof(struct ethhdr) + sizeof(struct iphdr);
-            if (udph + 1 > (struct udphdr *)data_end) {
-                return XDP_DROP;
-            }
             inner_ip->saddr = rule->bind_addr;
             update_iph_checksum(inner_ip);
 
-            if (ntohs(udph->source) != rule->bind_port) {
-                udph->source = htons(rule->bind_port);
-                update_udph_checksum(inner_ip, udph, data, data_end);
+            if (inner_ip->protocol == IPPROTO_UDP) {
+                struct udphdr *udph = data + sizeof(struct ethhdr) + sizeof(struct iphdr);
+                if (udph + 1 > (struct udphdr *)data_end) {
+                    return XDP_DROP;
+                }
+
+                if (ntohs(udph->source) == rule->to_port && ntohs(udph->source) != rule->bind_port) {
+                    udph->source = htons(rule->bind_port);
+                }
+                update_udph_checksum(inner_ip, udph, data_end);
             }
 
             return XDP_TX;
