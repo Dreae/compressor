@@ -72,7 +72,14 @@ struct bpf_map_def SEC("maps") forwarding_map = {
     .type = BPF_MAP_TYPE_HASH,
     .key_size = sizeof(uint64_t),
     .value_size = sizeof(struct forwarding_rule),
-    .max_entries = 255
+    .max_entries = 256
+};
+
+struct bpf_map_def SEC("maps") tunnel_map = {
+    .type = BPF_MAP_TYPE_HASH,
+    .key_size = sizeof(uint64_t),
+    .value_size = sizeof(struct forwarding_rule),
+    .max_entries = 256
 };
 
 static __always_inline void swap_dest_src_hwaddr(void *data) {
@@ -141,15 +148,16 @@ int xdp_program(struct xdp_md *ctx) {
             }
 
             struct forwarding_rule *rule;
-            rule = bpf_map_lookup_elem(&forwarding_map, &iph->daddr);
+            uint64_t key = iph->daddr + ntohs(udph->dest);
+            rule = bpf_map_lookup_elem(&forwarding_map, &key);
             if (rule) {
                 // Rule found, add outer IP frame
                 if (bpf_xdp_adjust_head(ctx, 0 - (int)sizeof(struct iphdr))) {
                     return XDP_ABORTED;
                 }
 
-                void *data_end = (void *)(long)ctx->data_end;
-                void *data = (void *)(long)ctx->data;
+                data_end = (void *)(long)ctx->data_end;
+                data = (void *)(long)ctx->data;
                 struct ethhdr *new_eth = data;
                 struct iphdr *new_iph = data + sizeof(struct ethhdr);
                 struct ethhdr *old_eth = data + sizeof(struct iphdr);
@@ -205,6 +213,47 @@ int xdp_program(struct xdp_md *ctx) {
             if (value && *value == 0) {
                 return XDP_DROP;
             }
+        } else if (iph->protocol == IPPROTO_IPIP) {
+            uint32_t saddr = iph->saddr;
+            struct forwarding_rule *rule = bpf_map_lookup_elem(&tunnel_map, &saddr);
+            if (!rule) {
+                return XDP_DROP;
+            }
+
+            // Save a copy of the eth header since it will
+            // get dropped when we move the XDP data
+            struct ethhdr old_eth;
+            __builtin_memcpy(&old_eth, data, sizeof(struct ethhdr));
+
+            // Remove outer IP frame
+            if (bpf_xdp_adjust_head(ctx, sizeof(struct iphdr))) {
+                return XDP_DROP;
+            }
+            data = (void *)(long)ctx->data;
+            data_end = (void *)(long)ctx->data_end;
+            struct ethhdr *new_eth = data;
+            struct iphdr *inner_ip = data + sizeof(struct ethhdr);
+
+            // Since this is SRCDS specific we only support UDP
+            if (new_eth + 1 > (struct ethhdr *)data_end || inner_ip + 1 > (struct iphdr *)data_end || inner_ip->protocol != IPPROTO_UDP) {
+                return XDP_DROP;
+            }
+            __builtin_memcpy(new_eth, &old_eth, sizeof(struct ethhdr));
+            swap_dest_src_hwaddr(data);
+
+            struct udphdr *udph = data + sizeof(struct ethhdr) + sizeof(struct iphdr);
+            if (udph + 1 > (struct udphdr *)data_end) {
+                return XDP_DROP;
+            }
+            inner_ip->saddr = rule->bind_addr;
+            update_iph_checksum(inner_ip);
+
+            if (ntohs(udph->source) != rule->bind_port) {
+                udph->source = htons(rule->bind_port);
+                update_udph_checksum(inner_ip, udph, data, data_end);
+            }
+
+            return XDP_TX;
         }
     }
 

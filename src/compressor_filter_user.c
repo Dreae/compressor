@@ -70,6 +70,13 @@ int load_xdp_prog(struct service_def **services, struct forwarding_rule **forwar
     }
     int forwarding_rules_fd = bpf_map__fd(map);
 
+    map = bpf_map__next(map, obj);
+    if (!map) {
+        fprintf(stderr, "Error finding tunneling map in XDP program\n");
+        return 1;
+    }
+    int tunnel_map_fd = bpf_map__fd(map);
+
     struct service_def *service;
     int idx = 0;
     uint8_t enable = 1;
@@ -110,7 +117,14 @@ int load_xdp_prog(struct service_def **services, struct forwarding_rule **forwar
         strcpy(dest_str, inet_ntoa(dest_addr));
 
         printf("Adding forwarding rule %s:%d <--> %s:%d\n", bind_str, rule->bind_port, dest_str, rule->to_port);
-        err = bpf_map_update_elem(forwarding_rules_fd, &rule->bind_addr, rule, BPF_ANY);
+        uint64_t key = rule->bind_addr + rule->bind_port;
+        err = bpf_map_update_elem(forwarding_rules_fd, &key, rule, BPF_ANY);
+        if (err) {
+            fprintf(stderr, "Store forwarding rule failed: (err:%d)\n", err);
+            perror("bpf_map_update_elem");
+            return 1;
+        }
+        err = bpf_map_update_elem(tunnel_map_fd, &rule->source_addr, rule, BPF_ANY);
         if (err) {
             fprintf(stderr, "Store forwarding rule failed: (err:%d)\n", err);
             perror("bpf_map_update_elem");
