@@ -9,6 +9,7 @@
 #include <string.h>
 #include "compressor_filter_user.h"
 #include "config.h"
+#include "bpf_load.h"
 
 static void cleanup_interface(void) {
     bpf_set_link_xdp_fd(ifindex, -1, XDP_FLAGS_SKB_MODE);
@@ -20,62 +21,48 @@ static void int_exit(int sig) {
 }
 
 int load_xdp_prog(struct service_def **services, struct forwarding_rule **forwarding, struct config *cfg) {
-    const char *filename = "/etc/compressor/compressor_filter_kern.o";
+    char *filename = "/etc/compressor/compressor_filter_kern.o";
 
-    struct bpf_prog_load_attr prog_load_attr = {
-        .prog_type = BPF_PROG_TYPE_XDP,
-    };
-    prog_load_attr.file = filename;
-
-    struct bpf_object *obj;
-    int prog_fd;
-    if (bpf_prog_load_xattr(&prog_load_attr, &obj, &prog_fd)) {
-        fprintf(stderr, "Error loading XDP program");
+    if (load_bpf_file(filename)) {
+        fprintf(stderr, "%s", bpf_log_buf);
         return 1;
     }
 
-    struct bpf_map *map;
-    map = bpf_map__next(NULL, obj);
-    if (!map) {
-        fprintf(stderr, "Error finding IP blacklist in XDP program\n");
+    if (!map_fd[0]) {
+        fprintf(stderr, "Error finding forwarding port map in XDP program\n");
         return 1;
     }
-    int ip_blacklist_fd = bpf_map__fd(map);
-    
-    map = bpf_map__next(map, obj);
-    if (!map) {
+    int forwarding_port_map_fd = map_fd[0];
+
+    if (!map_fd[1]) {
         fprintf(stderr, "Error finding TCP service map in XDP program\n");
         return 1;
     }
-    int tcp_service_fd = bpf_map__fd(map);
+    int tcp_service_fd = map_fd[1];
 
-    map = bpf_map__next(map, obj);
-    if (!map) {
+    if (!map_fd[2]) {
         fprintf(stderr, "Error finding UDP service map in XDP program\n");
         return 1;
     }
-    int udp_service_fd = bpf_map__fd(map);
+    int udp_service_fd = map_fd[2];
 
-    map = bpf_map__next(map, obj);
-    if (!map) {
+    if (!map_fd[3]) {
         fprintf(stderr, "Error finding config map in XDP program\n");
         return 1;
     }
-    int config_map_fd = bpf_map__fd(map);
+    int config_map_fd = map_fd[3];
 
-    map = bpf_map__next(map, obj);
-    if (!map) {
+    if (!map_fd[4]) {
         fprintf(stderr, "Error finding forwarding map in XDP program\n");
         return 1;
     }
-    int forwarding_rules_fd = bpf_map__fd(map);
+    int forwarding_rules_fd = map_fd[4];
 
-    map = bpf_map__next(map, obj);
-    if (!map) {
+    if (!map_fd[5]) {
         fprintf(stderr, "Error finding tunneling map in XDP program\n");
         return 1;
     }
-    int tunnel_map_fd = bpf_map__fd(map);
+    int tunnel_map_fd = map_fd[5];
 
     struct service_def *service;
     int idx = 0;
@@ -118,7 +105,14 @@ int load_xdp_prog(struct service_def **services, struct forwarding_rule **forwar
 
         printf("Adding forwarding rule %s:%d <--> %s:%d\n", bind_str, rule->bind_port, dest_str, rule->to_port);
         uint64_t key = rule->bind_addr;
-        err = bpf_map_update_elem(forwarding_rules_fd, &key, rule, BPF_ANY);
+        uint32_t port = (uint32_t)rule->bind_port;
+        err = bpf_map_update_elem(forwarding_port_map_fd, &port, rule, BPF_ANY);
+        if (err) {
+            fprintf(stderr, "Store forwarding rule failed: (err:%d)\n", err);
+            perror("bpf_map_update_elem");
+            return 1;
+        }
+        err = bpf_map_update_elem(forwarding_rules_fd, &key, &forwarding_port_map_fd, BPF_ANY);
         if (err) {
             fprintf(stderr, "Store forwarding rule failed: (err:%d)\n", err);
             perror("bpf_map_update_elem");
@@ -141,19 +135,13 @@ int load_xdp_prog(struct service_def **services, struct forwarding_rule **forwar
         perror("bpf_map_update_elem");
         return 1;
     }
-    
-    if (!prog_fd) {
-        perror("load_bpf_file");
-        return 1;
-    }
-
 
     signal(SIGINT, int_exit);
     signal(SIGTERM, int_exit);
     signal(SIGKILL, int_exit);
     atexit(cleanup_interface);
 
-    if (bpf_set_link_xdp_fd(ifindex, prog_fd, XDP_FLAGS_SKB_MODE) < 0) {
+    if (bpf_set_link_xdp_fd(ifindex, prog_fd[0], XDP_FLAGS_SKB_MODE) < 0) {
         fprintf(stderr, "link set xdp failed\n");
         return 1;
     }
