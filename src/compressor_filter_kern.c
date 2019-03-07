@@ -28,6 +28,7 @@ static void *(*bpf_map_lookup_elem)(void *map, void *key) = (void *) BPF_FUNC_ma
 static int (*bpf_xdp_adjust_head)(void *ctx, int offset) = (void *) BPF_FUNC_xdp_adjust_head;
 static int64_t (*bpf_csum_diff)(__be32 *from, uint32_t from_size, __be32 *to, uint32_t to_size, __wsum seed) = (void *) BPF_FUNC_csum_diff;
 static int (*bpf_map_update_elem)(void *map, void *key, const void *value, uint64_t flags) = (void *) BPF_FUNC_map_update_elem;
+static uint64_t (*bpf_ktime_get_ns)(void) = (void *) BPF_FUNC_ktime_get_ns;
 
 struct vlan_hdr {
     __be16 h_vlan_TCI;
@@ -91,6 +92,22 @@ struct bpf_map_def SEC("maps") tunnel_map = {
     .max_entries = 256
 };
 
+// Map 6
+struct bpf_map_def SEC("maps") tunnel_temporary_ports = {
+    .type = BPF_MAP_TYPE_HASH,
+    .key_size = sizeof(uint32_t),
+    .value_size = sizeof(struct tunnel_port_lease),
+    .max_entries = 65535
+};
+
+// Map 7
+struct bpf_map_def SEC("maps") tunnel_port_mapping = {
+    .type = BPF_MAP_TYPE_HASH_OF_MAPS,
+    .key_size = sizeof(uint32_t),
+    .inner_map_idx = 6,
+    .max_entries = 256
+};
+
 static __always_inline void swap_dest_src_hwaddr(void *data) {
     uint16_t *p = data;
     uint16_t dst[3];
@@ -119,7 +136,7 @@ static __always_inline void update_iph_checksum(struct iphdr *iph) {
 }
 
 static __always_inline void update_udph_checksum(struct iphdr *iph, struct udphdr *udph, void *data_end) {
-    // TODO
+    // FIXME: calculate new UDP checksum
     udph->check = 0;
 }
 
@@ -152,7 +169,16 @@ int xdp_program(struct xdp_md *ctx) {
                 return XDP_PASS;
             }
 
-            void *inner_map = bpf_map_lookup_elem(&forwarding_map, &iph->daddr);
+            void *inner_map = bpf_map_lookup_elem(&tunnel_port_mapping, &iph->daddr);
+            if (inner_map) {
+                uint32_t dest = (uint32_t)ntohs(udph->dest);
+                struct tunnel_port_lease *lease = bpf_map_lookup_elem(inner_map, &dest);
+                if (lease && (bpf_ktime_get_ns() - lease->time) < 30000000000) {
+                    // TODO: Forward to lease->daddr
+                }
+            }
+
+            inner_map = bpf_map_lookup_elem(&forwarding_map, &iph->daddr);
             if (inner_map) {
                 uint32_t dest = (uint32_t)ntohs(udph->dest);
                 struct forwarding_rule *rule = bpf_map_lookup_elem(inner_map, &dest);
@@ -265,6 +291,17 @@ int xdp_program(struct xdp_md *ctx) {
 
                 if (ntohs(udph->source) == rule->to_port && ntohs(udph->source) != rule->bind_port) {
                     udph->source = htons(rule->bind_port);
+                } else {
+                    void *inner_map = bpf_map_lookup_elem(&tunnel_port_mapping, &rule->bind_addr);
+                    if (inner_map) {
+                        uint32_t port = (uint32_t)ntohs(udph->source);
+                        struct tunnel_port_lease lease = {
+                            .daddr = saddr,
+                            .time = bpf_ktime_get_ns()
+                        };
+
+                        bpf_map_update_elem(inner_map, &port, &lease, BPF_ANY);
+                    }
                 }
                 update_udph_checksum(inner_ip, udph, data_end);
             }
@@ -273,5 +310,7 @@ int xdp_program(struct xdp_md *ctx) {
         }
     }
 
-    return XDP_DROP;
+    return XDP_PASS;
 }
+
+char _license[] SEC("license") = "GPL";
