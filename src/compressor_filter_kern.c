@@ -27,7 +27,6 @@
 static void *(*bpf_map_lookup_elem)(void *map, void *key) = (void *) BPF_FUNC_map_lookup_elem;
 static int (*bpf_xdp_adjust_head)(void *ctx, int offset) = (void *) BPF_FUNC_xdp_adjust_head;
 static int64_t (*bpf_csum_diff)(__be32 *from, uint32_t from_size, __be32 *to, uint32_t to_size, __wsum seed) = (void *) BPF_FUNC_csum_diff;
-static int (*bpf_map_update_elem)(void *map, void *key, const void *value, uint64_t flags) = (void *) BPF_FUNC_map_update_elem;
 static uint64_t (*bpf_ktime_get_ns)(void) = (void *) BPF_FUNC_ktime_get_ns;
 
 struct vlan_hdr {
@@ -44,16 +43,8 @@ struct bpf_map_def {
     unsigned int inner_map_idx;
     unsigned int numa_node;
 };
-// Map 0
-struct bpf_map_def SEC("maps") forwarding_ports_map = {
-    .type = BPF_MAP_TYPE_HASH,
-    .key_size = sizeof(uint32_t),
-    .value_size = sizeof(struct forwarding_rule),
-    .max_entries = 256,
-    .map_flags = BPF_F_NO_PREALLOC
-};
 
-// Map 1
+// Map 0
 struct bpf_map_def SEC("maps") tcp_services = {
     .type = BPF_MAP_TYPE_ARRAY,
     .key_size = sizeof(uint32_t),
@@ -61,7 +52,7 @@ struct bpf_map_def SEC("maps") tcp_services = {
     .max_entries = 65536
 };
 
-// Map 2
+// Map 1
 struct bpf_map_def SEC("maps") udp_services = {
     .type = BPF_MAP_TYPE_ARRAY,
     .key_size = sizeof(uint32_t),
@@ -69,7 +60,7 @@ struct bpf_map_def SEC("maps") udp_services = {
     .max_entries = 65536
 };
 
-// Map 3
+// Map 2
 struct bpf_map_def SEC("maps") config_map = {
     .type = BPF_MAP_TYPE_ARRAY,
     .key_size = sizeof(uint32_t),
@@ -77,15 +68,15 @@ struct bpf_map_def SEC("maps") config_map = {
     .max_entries = 1
 };
 
-// Map 4
+// Map 3
 struct bpf_map_def SEC("maps") forwarding_map = {
-    .type = BPF_MAP_TYPE_HASH_OF_MAPS,
+    .type = BPF_MAP_TYPE_HASH,
     .key_size = sizeof(uint32_t),
-    .inner_map_idx = 0,
+    .value_size = sizeof(struct forwarding_rule),
     .max_entries = 256
 };
 
-// Map 5
+// Map 4
 struct bpf_map_def SEC("maps") tunnel_map = {
     .type = BPF_MAP_TYPE_HASH,
     .key_size = sizeof(uint32_t),
@@ -154,62 +145,62 @@ int xdp_program(struct xdp_md *ctx) {
                 return XDP_PASS;
             }
 
-            void *inner_map = bpf_map_lookup_elem(&forwarding_map, &iph->daddr);
-            if (inner_map) {
-                uint32_t dest = (uint32_t)ntohs(udph->dest);
-                struct forwarding_rule *rule = bpf_map_lookup_elem(inner_map, &dest);
-                if (rule) {
-                    // Rule found, add outer IP frame
-                    if (bpf_xdp_adjust_head(ctx, 0 - (int)sizeof(struct iphdr))) {
-                        return XDP_ABORTED;
-                    }
-
-                    data_end = (void *)(long)ctx->data_end;
-                    data = (void *)(long)ctx->data;
-                    struct ethhdr *new_eth = data;
-                    struct iphdr *new_iph = data + sizeof(struct ethhdr);
-                    struct ethhdr *old_eth = data + sizeof(struct iphdr);
-                    iph = data + sizeof(struct ethhdr) + sizeof(struct iphdr);
-                    if (new_eth + 1 > (struct ethhdr *)data_end || old_eth + 1 > (struct ethhdr *)data_end || new_iph + 1 > (struct iphdr *)data_end || iph + 1 > (struct iphdr *)data_end) {
-                        return XDP_DROP;
-                    }
-
-                    // Ethernet header and IP header are the same size,
-                    // move the Ethernet header to the front of the newly
-                    // created space and add a new IP header in its place
-                    __builtin_memcpy(new_eth, old_eth, sizeof(struct ethhdr));
-                    new_iph->version = 4;
-                    new_iph->ihl = sizeof(struct iphdr) >> 2;
-                    new_iph->frag_off = 0;
-                    new_iph->protocol = IPPROTO_IPIP;
-                    new_iph->check = 0;
-                    new_iph->ttl = 64;
-                    new_iph->tos = 0;
-                    new_iph->tot_len = htons(ntohs(iph->tot_len) + sizeof(struct iphdr));
-                    new_iph->daddr = rule->to_addr;
-                    new_iph->saddr = rule->bind_addr;
-                    update_iph_checksum(new_iph);
-
-                    iph->daddr = rule->to_addr;
-                    update_iph_checksum(iph);
-
-                    udph = data + sizeof(struct ethhdr) + (2 * sizeof(struct iphdr));
-                    if (udph + 1 > (struct udphdr *)data_end) {
-                        return XDP_DROP;
-                    }
-                    // Do port translation only if we know what the port is doing
-                    if (ntohs(udph->dest) == rule->bind_port && rule->bind_port != rule->to_port) {
-                        udph->dest = htons(rule->to_port);
-                    }
-                    update_udph_checksum(iph, udph, data_end);
-
-                    swap_dest_src_hwaddr(data);
-
-                    return XDP_TX;
+            uint32_t dest = (uint32_t)ntohs(udph->dest);
+            struct forwarding_rule *rule = bpf_map_lookup_elem(&forwarding_map, &dest);
+            if (rule) {
+                if (dest != rule->bind_port && dest != rule->steam_port && iph->saddr != 0x08080808) {
+                    return XDP_DROP;
                 }
+
+                // Rule found, add outer IP frame
+                if (bpf_xdp_adjust_head(ctx, 0 - (int)sizeof(struct iphdr))) {
+                    return XDP_ABORTED;
+                }
+
+                data_end = (void *)(long)ctx->data_end;
+                data = (void *)(long)ctx->data;
+                struct ethhdr *new_eth = data;
+                struct iphdr *new_iph = data + sizeof(struct ethhdr);
+                struct ethhdr *old_eth = data + sizeof(struct iphdr);
+                iph = data + sizeof(struct ethhdr) + sizeof(struct iphdr);
+                if (new_eth + 1 > (struct ethhdr *)data_end || old_eth + 1 > (struct ethhdr *)data_end || new_iph + 1 > (struct iphdr *)data_end || iph + 1 > (struct iphdr *)data_end) {
+                    return XDP_DROP;
+                }
+
+                // Ethernet header and IP header are the same size,
+                // move the Ethernet header to the front of the newly
+                // created space and add a new IP header in its place
+                __builtin_memcpy(new_eth, old_eth, sizeof(struct ethhdr));
+                new_iph->version = 4;
+                new_iph->ihl = sizeof(struct iphdr) >> 2;
+                new_iph->frag_off = 0;
+                new_iph->protocol = IPPROTO_IPIP;
+                new_iph->check = 0;
+                new_iph->ttl = 64;
+                new_iph->tos = 0;
+                new_iph->tot_len = htons(ntohs(iph->tot_len) + sizeof(struct iphdr));
+                new_iph->daddr = rule->to_addr;
+                new_iph->saddr = rule->bind_addr;
+                update_iph_checksum(new_iph);
+
+                iph->daddr = rule->to_addr;
+                update_iph_checksum(iph);
+
+                udph = data + sizeof(struct ethhdr) + (2 * sizeof(struct iphdr));
+                if (udph + 1 > (struct udphdr *)data_end) {
+                    return XDP_DROP;
+                }
+                // Do port translation only if we know what the port is doing
+                if (dest == rule->bind_port && rule->bind_port != rule->to_port) {
+                    udph->dest = htons(rule->to_port);
+                }
+                update_udph_checksum(iph, udph, data_end);
+
+                swap_dest_src_hwaddr(data);
+
+                return XDP_TX;
             }
 
-            uint32_t dest = (uint32_t)htons(udph->dest);
             uint8_t *value = bpf_map_lookup_elem(&udp_services, &dest);
             if (value && *value == 0) {
                 return XDP_DROP;

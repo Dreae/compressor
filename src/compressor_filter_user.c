@@ -30,35 +30,35 @@ int load_xdp_prog(struct service_def **services, struct forwarding_rule **forwar
         return 1;
     }
 
-    if (!map_fd[1]) {
+    if (!map_fd[0]) {
         fprintf(stderr, "Error finding TCP service map in XDP program\n");
         return 1;
     }
-    int tcp_service_fd = map_fd[1];
+    int tcp_service_fd = map_fd[0];
 
-    if (!map_fd[2]) {
+    if (!map_fd[1]) {
         fprintf(stderr, "Error finding UDP service map in XDP program\n");
         return 1;
     }
-    int udp_service_fd = map_fd[2];
+    int udp_service_fd = map_fd[1];
 
-    if (!map_fd[3]) {
+    if (!map_fd[2]) {
         fprintf(stderr, "Error finding config map in XDP program\n");
         return 1;
     }
-    int config_map_fd = map_fd[3];
+    int config_map_fd = map_fd[2];
 
-    if (!map_fd[4]) {
+    if (!map_fd[3]) {
         fprintf(stderr, "Error finding forwarding map in XDP program\n");
         return 1;
     }
-    int forwarding_rules_fd = map_fd[4];
+    int forwarding_rules_fd = map_fd[3];
 
-    if (!map_fd[5]) {
+    if (!map_fd[4]) {
         fprintf(stderr, "Error finding tunneling map in XDP program\n");
         return 1;
     }
-    int tunnel_map_fd = map_fd[5];
+    int tunnel_map_fd = map_fd[4];
 
     struct service_def *service;
     int idx = 0;
@@ -100,41 +100,10 @@ int load_xdp_prog(struct service_def **services, struct forwarding_rule **forwar
         strcpy(dest_str, inet_ntoa(dest_addr));
 
         printf("Adding forwarding rule %s:%d <--> %s:%d (%d)\n", bind_str, rule->bind_port, dest_str, rule->to_port, rule->steam_port);
-        uint64_t key = rule->bind_addr;
         uint32_t port = (uint32_t)rule->bind_port;
         uint32_t steam_port = (uint32_t)rule->steam_port;
 
-        void *value;
-        int forwarding_port_map_fd;
-        err = bpf_map_lookup_elem(forwarding_rules_fd, &key, &value);
-        if (err && errno == ENOENT) {
-            forwarding_port_map_fd = bpf_create_map(BPF_MAP_TYPE_HASH, sizeof(uint32_t), sizeof(struct forwarding_rule), 256, BPF_F_NO_PREALLOC);
-            if (forwarding_port_map_fd == -1) {
-                fprintf(stderr, "Error creating port map: (err:%d)\n", err);
-                perror("bpf_create_map");
-                return 1;
-            }
-        } else if (err) {
-            fprintf(stderr, "Error creating port map: (err:%d)\n", err);
-            perror("bpf_create_map");
-            return 1;
-        } else {
-            forwarding_port_map_fd = *(int *)value;
-        }
-
-        err = bpf_map_update_elem(forwarding_port_map_fd, &port, rule, BPF_ANY);
-        if (err) {
-            fprintf(stderr, "Store forwarding rule failed: (err:%d)\n", err);
-            perror("bpf_map_update_elem");
-            return 1;
-        }
-        err = bpf_map_update_elem(forwarding_port_map_fd, &steam_port, rule, BPF_NOEXIST);
-        if (err) {
-            fprintf(stderr, "Error storing steam port for %s (steam_port already in use? err:%d)\n", dest_str, err);
-            perror("bpf_map_update_elem");
-            return 1;
-        }
-        err = bpf_map_update_elem(forwarding_rules_fd, &key, &forwarding_port_map_fd, BPF_ANY);
+        err = bpf_map_update_elem(forwarding_rules_fd, &rule->bind_addr, rule, BPF_ANY);
         if (err) {
             fprintf(stderr, "Store forwarding IP map failed: (err:%d)\n", err);
             perror("bpf_map_update_elem");
