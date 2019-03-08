@@ -146,9 +146,9 @@ int xdp_program(struct xdp_md *ctx) {
             }
 
             uint32_t dest = (uint32_t)ntohs(udph->dest);
-            struct forwarding_rule *rule = bpf_map_lookup_elem(&forwarding_map, &dest);
+            struct forwarding_rule *rule = bpf_map_lookup_elem(&forwarding_map, &iph->daddr);
             if (rule) {
-                if (dest != rule->bind_port && dest != rule->steam_port && iph->saddr != 0x08080808) {
+                if (udph->dest != htons(rule->bind_port) && udph->dest != htons(rule->steam_port) && iph->saddr != 0x08080808) {
                     return XDP_DROP;
                 }
 

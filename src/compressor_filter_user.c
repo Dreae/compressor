@@ -100,16 +100,19 @@ int load_xdp_prog(struct service_def **services, struct forwarding_rule **forwar
         strcpy(dest_str, inet_ntoa(dest_addr));
 
         printf("Adding forwarding rule %s:%d <--> %s:%d (%d)\n", bind_str, rule->bind_port, dest_str, rule->to_port, rule->steam_port);
-        uint32_t port = (uint32_t)rule->bind_port;
-        uint32_t steam_port = (uint32_t)rule->steam_port;
-
-        err = bpf_map_update_elem(forwarding_rules_fd, &rule->bind_addr, rule, BPF_ANY);
+        err = bpf_map_update_elem(forwarding_rules_fd, &rule->bind_addr, rule, BPF_NOEXIST);
         if (err) {
             fprintf(stderr, "Store forwarding IP map failed: (err:%d)\n", err);
             perror("bpf_map_update_elem");
             return 1;
         }
-
+        err = bpf_map_update_elem(tunnel_map_fd, &rule->to_addr, rule, BPF_NOEXIST);
+        if (err) {
+            fprintf(stderr, "Store forwarding IP map failed: (err:%d)\n", err);
+            perror("bpf_map_update_elem");
+            return 1;
+        }
+        
         idx++;
     }
 
