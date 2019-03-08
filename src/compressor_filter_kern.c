@@ -49,7 +49,8 @@ struct bpf_map_def SEC("maps") forwarding_ports_map = {
     .type = BPF_MAP_TYPE_HASH,
     .key_size = sizeof(uint32_t),
     .value_size = sizeof(struct forwarding_rule),
-    .max_entries = 256
+    .max_entries = 256,
+    .map_flags = BPF_F_NO_PREALLOC
 };
 
 // Map 1
@@ -89,22 +90,6 @@ struct bpf_map_def SEC("maps") tunnel_map = {
     .type = BPF_MAP_TYPE_HASH,
     .key_size = sizeof(uint32_t),
     .value_size = sizeof(struct forwarding_rule),
-    .max_entries = 256
-};
-
-// Map 6
-struct bpf_map_def SEC("maps") tunnel_temporary_ports = {
-    .type = BPF_MAP_TYPE_HASH,
-    .key_size = sizeof(uint32_t),
-    .value_size = sizeof(struct tunnel_port_lease),
-    .max_entries = 65535
-};
-
-// Map 7
-struct bpf_map_def SEC("maps") tunnel_port_mapping = {
-    .type = BPF_MAP_TYPE_HASH_OF_MAPS,
-    .key_size = sizeof(uint32_t),
-    .inner_map_idx = 6,
     .max_entries = 256
 };
 
@@ -169,16 +154,7 @@ int xdp_program(struct xdp_md *ctx) {
                 return XDP_PASS;
             }
 
-            void *inner_map = bpf_map_lookup_elem(&tunnel_port_mapping, &iph->daddr);
-            if (inner_map) {
-                uint32_t dest = (uint32_t)ntohs(udph->dest);
-                struct tunnel_port_lease *lease = bpf_map_lookup_elem(inner_map, &dest);
-                if (lease && (bpf_ktime_get_ns() - lease->time) < 30000000000) {
-                    // TODO: Forward to lease->daddr
-                }
-            }
-
-            inner_map = bpf_map_lookup_elem(&forwarding_map, &iph->daddr);
+            void *inner_map = bpf_map_lookup_elem(&forwarding_map, &iph->daddr);
             if (inner_map) {
                 uint32_t dest = (uint32_t)ntohs(udph->dest);
                 struct forwarding_rule *rule = bpf_map_lookup_elem(inner_map, &dest);
@@ -211,7 +187,7 @@ int xdp_program(struct xdp_md *ctx) {
                     new_iph->tos = 0;
                     new_iph->tot_len = htons(ntohs(iph->tot_len) + sizeof(struct iphdr));
                     new_iph->daddr = rule->to_addr;
-                    new_iph->saddr = rule->source_addr;
+                    new_iph->saddr = rule->bind_addr;
                     update_iph_checksum(new_iph);
 
                     iph->daddr = rule->to_addr;
@@ -291,18 +267,8 @@ int xdp_program(struct xdp_md *ctx) {
 
                 if (ntohs(udph->source) == rule->to_port && ntohs(udph->source) != rule->bind_port) {
                     udph->source = htons(rule->bind_port);
-                } else {
-                    void *inner_map = bpf_map_lookup_elem(&tunnel_port_mapping, &rule->bind_addr);
-                    if (inner_map) {
-                        uint32_t port = (uint32_t)ntohs(udph->source);
-                        struct tunnel_port_lease lease = {
-                            .daddr = saddr,
-                            .time = bpf_ktime_get_ns()
-                        };
-
-                        bpf_map_update_elem(inner_map, &port, &lease, BPF_ANY);
-                    }
                 }
+
                 update_udph_checksum(inner_ip, udph, data_end);
             }
 
@@ -310,6 +276,7 @@ int xdp_program(struct xdp_md *ctx) {
         }
     }
 
+    // FIXME: Figure out why default DROP kills SSH
     return XDP_PASS;
 }
 

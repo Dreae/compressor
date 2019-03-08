@@ -93,13 +93,23 @@ struct forwarding_rule *parse_forwarding_rule(config_setting_t *cfg_rule) {
         return NULL;
     }
 
+    const char *steamport;
+    uint16_t steam_port = 26901;
+    int get_steamport = config_setting_lookup_string(cfg_rule, "steam_port", &steamport);
+    if (get_steamport) {
+        steam_port = atoi(steamport);
+        if (!steam_port) {
+            fprintf(stderr, "Error parsing steam port %s\n", steamport);
+            return NULL;
+        }
+    }
+
     struct forwarding_rule *rule = malloc(sizeof(struct forwarding_rule));
     rule->bind_addr = bind_inet.s_addr;
     rule->bind_port = bind_port;
-    rule->source_addr = bind_inet.s_addr;
-    rule->source_port = bind_port;
+
     rule->to_addr = dest_inet.s_addr;
     rule->to_port = dest_port;
-
+    rule->steam_port = steam_port;
     return rule;
 }
