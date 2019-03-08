@@ -13,6 +13,7 @@
 
 int ifindex;
 #include "compressor_filter_user.h"
+#include "compressor_cache_user.h"
 
 int get_iface_mac_address(const char *interface, uint16_t *addr) {
     char filename[256];
@@ -119,6 +120,7 @@ int main(int argc, char **argv) {
 
         uint16_t hwaddr[3];
         if (!get_iface_mac_address(interface, hwaddr)) {
+            perror("Error getting mac address");
             return 1;
         }
         struct config cfg = { 0 };
@@ -127,6 +129,10 @@ int main(int argc, char **argv) {
         cfg.hw3 = htons(hwaddr[2]);
 
         if ((res = load_xdp_prog(service_defs, forwarding_rules, &cfg)) != 0) {
+            return res;
+        }
+
+        if ((res = load_skb_program(interface, ifindex)) != 0) {
             return res;
         }
 

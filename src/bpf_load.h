@@ -1,6 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0 */
-#ifndef __BPF_LOAD_H
-#define __BPF_LOAD_H
+#pragma once
 
 #include <bpf.h>
 
@@ -55,4 +54,3 @@ int load_bpf_file_fixup_map(const char *path, fixup_map_cb fixup_map);
 
 void read_trace_pipe(void);
 int bpf_set_link_xdp_fd(int ifindex, int fd, __u32 flags);
-#endif

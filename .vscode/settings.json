@@ -2,6 +2,7 @@
     "files.associations": {
         "bpf.h": "c",
         "ip.h": "c",
-        "if_link.h": "c"
+        "if_link.h": "c",
+        "in.h": "c"
     }
 }

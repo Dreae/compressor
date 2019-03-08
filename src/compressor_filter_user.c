@@ -26,7 +26,8 @@ int load_xdp_prog(struct service_def **services, struct forwarding_rule **forwar
     char *filename = "/etc/compressor/compressor_filter_kern.o";
 
     if (load_bpf_file(filename)) {
-        fprintf(stderr, "%s", bpf_log_buf);
+        fprintf(stderr, "Error loading BPF file\n");
+        fprintf(stderr, "%s\n", bpf_log_buf);
         return 1;
     }
 
@@ -112,7 +113,7 @@ int load_xdp_prog(struct service_def **services, struct forwarding_rule **forwar
             perror("bpf_map_update_elem");
             return 1;
         }
-        
+
         idx++;
     }
 

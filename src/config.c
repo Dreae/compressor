@@ -104,6 +104,13 @@ struct forwarding_rule *parse_forwarding_rule(config_setting_t *cfg_rule) {
         }
     }
 
+    const char *a2s_info_str;
+    uint8_t a2s_info_cache = 0;
+    int get_a2sinfo = config_setting_lookup_bool(cfg_rule, "a2s_info_cache", &a2s_info_str);
+    if (get_a2sinfo) {
+        a2s_info_cache = atoi(a2s_info_str);
+    }
+
     struct forwarding_rule *rule = malloc(sizeof(struct forwarding_rule));
     rule->bind_addr = bind_inet.s_addr;
     rule->bind_port = bind_port;
@@ -111,5 +118,6 @@ struct forwarding_rule *parse_forwarding_rule(config_setting_t *cfg_rule) {
     rule->to_addr = dest_inet.s_addr;
     rule->to_port = dest_port;
     rule->steam_port = steam_port;
+    rule->a2s_info_cache = a2s_info_cache;
     return rule;
 }
