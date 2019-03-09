@@ -210,10 +210,12 @@ static inline void *xq_get_data(struct xdp_sock *xsk, uint64_t addr) {
 }
 
 static void hex_dump(uint8_t *pkt, size_t length, uint64_t addr) {
-    printf("rcvd\nlength = %zu\n", length);
+    const uint8_t *address = pkt;
+    pthread_t self = pthread_self();
+    printf("rcvd thread-%lu\nlength = %zu\n", self, length);
     printf("addr=%lu | ", addr);
     while (length-- > 0) {
-        printf("%02X ", *pkt);
+        printf("%02X ", *address++);
     }
     printf("\n");
 } 

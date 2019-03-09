@@ -106,7 +106,15 @@ int load_xdp_prog(struct service_def **services, struct forwarding_rule **forwar
         strcpy(bind_str, inet_ntoa(bind_addr));
         strcpy(dest_str, inet_ntoa(dest_addr));
 
-        printf("Adding forwarding rule %s:%d <--> %s:%d (%d)\n", bind_str, rule->bind_port, dest_str, rule->to_port, rule->steam_port);
+        printf(
+            "Adding forwarding rule %s:%d <--> %s:%d (%d, A2S_INFO cache: %s)\n",
+            bind_str,
+            rule->bind_port,
+            dest_str,
+            rule->to_port,
+            rule->steam_port,
+            rule->a2s_info_cache ? "on" : "off"
+        );
         err = bpf_map_update_elem(forwarding_rules_fd, &rule->bind_addr, rule, BPF_NOEXIST);
         if (err) {
             fprintf(stderr, "Store forwarding IP map failed: (err:%d)\n", err);

@@ -141,6 +141,13 @@ int xdp_program(struct xdp_md *ctx) {
                     return XDP_DROP;
                 }
 
+                uint64_t *udpdata = data + sizeof(struct ethhdr) + sizeof(struct iphdr) + sizeof(struct udphdr);
+                if (!(udpdata + 1 > (uint64_t *)data_end)) {
+                    if (*udpdata == 0xffffffff54536f75 && rule->a2s_info_cache) {
+                        return bpf_redirect_map(&xsk_map, 0, 0);
+                    }
+                }
+
                 // Rule found, add outer IP frame
                 if (bpf_xdp_adjust_head(ctx, 0 - (int)sizeof(struct iphdr))) {
                     return XDP_ABORTED;
@@ -245,20 +252,14 @@ int xdp_program(struct xdp_md *ctx) {
                     return XDP_DROP;
                 }
 
-                if (ntohs(udph->source) == 1337) {
-                    return bpf_redirect_map(&xsk_map, 0, 0);
-                }
-
                 if (ntohs(udph->source) == rule->to_port) {
                     uint64_t *udpdata = data + sizeof(struct ethhdr) + sizeof(struct iphdr) + sizeof(struct udphdr);
-                    if (udpdata + 1 > (uint64_t *)data_end) {
-                        goto cont;
-                    } 
-                    if (((*udpdata) & 0xffffffffff000000) == 0xffffffff49000000 && rule->a2s_info_cache) {
-                        return bpf_redirect_map(&xsk_map, 0, 0);    
+                    if (!(udpdata + 1 > (uint64_t *)data_end)) {
+                        if (((*udpdata) & 0xffffffffff000000) == 0xffffffff49000000 && rule->a2s_info_cache) {
+                            return bpf_redirect_map(&xsk_map, 0, 0);
+                        }
                     }
 
-cont:
                     if (ntohs(udph->source) != rule->bind_port) {
                         udph->source = htons(rule->bind_port);
                     }

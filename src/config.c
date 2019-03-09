@@ -105,10 +105,10 @@ struct forwarding_rule *parse_forwarding_rule(config_setting_t *cfg_rule) {
     }
 
     const char *a2s_info_str;
-    uint8_t a2s_info_cache = 0;
-    int get_a2sinfo = config_setting_lookup_bool(cfg_rule, "a2s_info_cache", &a2s_info_str);
-    if (get_a2sinfo) {
-        a2s_info_cache = atoi(a2s_info_str);
+    int a2s_info_cache = 0;
+    int get_a2sinfo = config_setting_lookup_int(cfg_rule, "a2s_info_cache", &a2s_info_cache);
+    if (get_a2sinfo == CONFIG_FALSE) {
+        a2s_info_cache = 0;
     }
 
     struct forwarding_rule *rule = malloc(sizeof(struct forwarding_rule));
