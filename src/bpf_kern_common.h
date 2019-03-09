@@ -5,7 +5,8 @@
 
 
 #define SEC(NAME) __attribute__((section(NAME), used))
-
+#define likely(x) __builtin_expect(!!(x), 1)
+#define unlikely(x) __builtin_expect(!!(x), 0)
 #if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
 #define htons(x) ((__be16)___constant_swab16((x)))
 #define ntohs(x) ((__be16)___constant_swab16((x)))

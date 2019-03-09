@@ -65,6 +65,14 @@ struct bpf_map_def SEC("maps") tunnel_map = {
     .max_entries = 256
 };
 
+// Map 5
+struct bpf_map_def SEC("maps") xsk_map = {
+    .type = BPF_MAP_TYPE_XSKMAP,
+    .key_size = sizeof(uint32_t),
+    .value_size = sizeof(uint32_t),
+    .max_entries = 4
+};
+
 static __always_inline void swap_dest_src_hwaddr(void *data) {
     uint16_t *p = data;
     uint16_t dst[3];
@@ -114,7 +122,7 @@ int xdp_program(struct xdp_md *ctx) {
         return XDP_ABORTED;
     }
 
-    if (__builtin_expect(eth->h_proto == htons(ETH_P_IP), 1)) {
+    if (likely(eth->h_proto == htons(ETH_P_IP))) {
         struct iphdr *iph = data + sizeof(struct ethhdr);
         if(iph + 1 > (struct iphdr *)data_end) {
             return XDP_PASS;

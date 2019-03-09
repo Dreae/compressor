@@ -128,11 +128,11 @@ int main(int argc, char **argv) {
         cfg.hw2 = htons(hwaddr[1]);
         cfg.hw3 = htons(hwaddr[2]);
 
-        if ((res = load_xdp_prog(service_defs, forwarding_rules, &cfg)) != 0) {
+        if (!(res = load_xdp_prog(service_defs, forwarding_rules, &cfg))) {
             return res;
         }
 
-        if ((res = load_skb_program(interface, ifindex)) != 0) {
+        if ((res = load_skb_program(interface, ifindex, res)) != 0) {
             return res;
         }
 

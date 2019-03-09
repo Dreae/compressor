@@ -28,38 +28,44 @@ int load_xdp_prog(struct service_def **services, struct forwarding_rule **forwar
     if (load_bpf_file(filename)) {
         fprintf(stderr, "Error loading BPF file\n");
         fprintf(stderr, "%s\n", bpf_log_buf);
-        return 1;
+        return 0;
     }
 
     if (!map_fd[0]) {
         fprintf(stderr, "Error finding TCP service map in XDP program\n");
-        return 1;
+        return 0;
     }
     int tcp_service_fd = map_fd[0];
 
     if (!map_fd[1]) {
         fprintf(stderr, "Error finding UDP service map in XDP program\n");
-        return 1;
+        return 0;
     }
     int udp_service_fd = map_fd[1];
 
     if (!map_fd[2]) {
         fprintf(stderr, "Error finding config map in XDP program\n");
-        return 1;
+        return 0;
     }
     int config_map_fd = map_fd[2];
 
     if (!map_fd[3]) {
         fprintf(stderr, "Error finding forwarding map in XDP program\n");
-        return 1;
+        return 0;
     }
     int forwarding_rules_fd = map_fd[3];
 
     if (!map_fd[4]) {
         fprintf(stderr, "Error finding tunneling map in XDP program\n");
-        return 1;
+        return 0;
     }
     int tunnel_map_fd = map_fd[4];
+
+    if (!map_fd[5]) {
+        fprintf(stderr, "Error finding XSK map in XDP program\n");
+        return 0;
+    }
+    int xsk_map_fd = map_fd[5];
 
     struct service_def *service;
     int idx = 0;
@@ -81,7 +87,7 @@ int load_xdp_prog(struct service_def **services, struct forwarding_rule **forwar
         if (err) {
             fprintf(stderr, "Store service port failed: (err:%d)\n", err);
             perror("bpf_map_update_elem");
-            return 1;
+            return 0;
         }
 
         idx++;
@@ -105,13 +111,13 @@ int load_xdp_prog(struct service_def **services, struct forwarding_rule **forwar
         if (err) {
             fprintf(stderr, "Store forwarding IP map failed: (err:%d)\n", err);
             perror("bpf_map_update_elem");
-            return 1;
+            return 0;
         }
         err = bpf_map_update_elem(tunnel_map_fd, &rule->to_addr, rule, BPF_NOEXIST);
         if (err) {
             fprintf(stderr, "Store forwarding IP map failed: (err:%d)\n", err);
             perror("bpf_map_update_elem");
-            return 1;
+            return 0;
         }
 
         idx++;
@@ -122,7 +128,7 @@ int load_xdp_prog(struct service_def **services, struct forwarding_rule **forwar
     if (err) {
         fprintf(stderr, "Store config failed: (err:%d)\n", err);
         perror("bpf_map_update_elem");
-        return 1;
+        return 0;
     }
 
     signal(SIGINT, int_exit);
@@ -132,8 +138,8 @@ int load_xdp_prog(struct service_def **services, struct forwarding_rule **forwar
 
     if (bpf_set_link_xdp_fd(ifindex, prog_fd[0], XDP_FLAGS_SKB_MODE) < 0) {
         fprintf(stderr, "link set xdp failed\n");
-        return 1;
+        return 0;
     }
 
-    return 0;
+    return xsk_map_fd;
 }
