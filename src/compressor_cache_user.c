@@ -17,6 +17,7 @@
 #include <pthread.h>
 #include <linux/bpf.h>
 #include <linux/bpf_common.h>
+#include <poll.h>
 
 #include "bpf_load.h"
 
@@ -91,10 +92,37 @@ static inline int umem_nb_free(struct xdp_umem_uqueue *q, uint32_t nb) {
         return free_entries;
     }
 
-    barrier();
     q->cached_cons = *q->consumer + q->size;
 
     return q->cached_cons - q->cached_prod;
+}
+
+static inline uint32_t umem_nb_avail(struct xdp_umem_uqueue *q, uint32_t nb) {
+    uint32_t entries = q->cached_prod - q->cached_cons;
+
+    if (entries == 0) {
+        q->cached_prod = *q->producer;
+        entries = q->cached_prod - q->cached_cons;
+    }
+
+    return (entries > nb) ? nb : entries;
+}
+
+static inline int umem_fill_to_kernel_ex(struct xdp_umem_uqueue *fq, struct xdp_desc *d, size_t nb) {
+    if (umem_nb_free(fq, nb) < nb) {
+        return -ENOSPC;
+    }
+
+    for (uint32_t i = 0; i < nb; i++) {
+        uint32_t idx = fq->cached_prod++ & fq->mask;
+
+        fq->ring[idx] = d[i].addr;
+    }
+
+    barrier();
+    *fq->producer = fq->cached_prod;
+
+    return 0;
 }
 
 static inline int umem_fill_to_kernel(struct xdp_umem_uqueue *fq, uint64_t *d, size_t nb) {
@@ -108,9 +136,120 @@ static inline int umem_fill_to_kernel(struct xdp_umem_uqueue *fq, uint64_t *d, s
         fq->ring[idx] = d[i];
     }
 
+    barrier();
     *fq->producer = fq->cached_prod;
 
     return 0;
+}
+
+static inline uint32_t umem_complete_from_kernel(struct xdp_umem_uqueue *cq, uint64_t *d, size_t nb) {
+    uint32_t entries = umem_nb_avail(cq, nb);
+
+    barrier();
+
+    for (uint32_t i = 0; i < entries; i++) {
+        uint32_t idx = cq->cached_cons++ & cq->mask;
+        d[i] = cq->ring[idx];
+    }
+
+    if (entries > 0) {
+        barrier();
+        *cq->consumer = cq->cached_cons;
+    }
+
+    return entries;
+}
+
+// xq_nb_[avail|free] and umem_nb_[avail|free] are all in support
+// of batching. `cached_prod` and `cached_cons` are the consumer
+// and producer pointers, cached at the start of a batch, so the
+// queue can be processed in full in batches.
+static inline uint32_t xq_nb_avail(struct xdp_uqueue *q, uint32_t ndescs) {
+    uint32_t entries = q->cached_prod - q->cached_cons;
+
+    if (entries == 0) {
+        q->cached_prod = *q->producer;
+        entries = q->cached_prod - q->cached_cons;
+    }
+
+    return (entries > ndescs) ? ndescs : entries;
+}
+
+static inline uint32_t xq_nb_free(struct xdp_uqueue *q, uint32_t ndescs) {
+    uint32_t free_entries = q->cached_cons - q->cached_prod;
+
+    if (free_entries > ndescs) {
+        return free_entries;
+    }
+
+    q->cached_cons = *q->consumer + q->size;
+    return q->cached_cons - q->cached_prod;
+}
+
+static inline int xq_deq(struct xdp_uqueue *uq, struct xdp_desc *descs, int ndescs) {
+    struct xdp_desc *r = uq->ring;
+
+    uint32_t entries = xq_nb_avail(uq, ndescs);
+    
+    barrier();
+    for (uint32_t i = 0; i < entries; i++) {
+        uint32_t idx = uq->cached_cons++ & uq->mask;
+        descs[i] = r[idx];
+    }
+
+    if (entries > 0) {
+        barrier();
+        *uq->consumer = uq->cached_cons;
+    }
+
+    return entries;
+}
+
+static inline void *xq_get_data(struct xdp_sock *xsk, uint64_t addr) {
+    return &xsk->umem->frames[addr];
+}
+
+static void hex_dump(uint8_t *pkt, size_t length, uint64_t addr) {
+    printf("rcvd\nlength = %zu\n", length);
+    printf("addr=%lu | ", addr);
+    while (length-- > 0) {
+        printf("%02X ", *pkt);
+    }
+    printf("\n");
+} 
+
+static void *xsk_log_and_drop(void *arg) {
+    struct xdp_sock *xsk = (struct xdp_sock *)arg;
+    struct pollfd fds[1];
+    memset(fds, 0, sizeof(fds));
+
+    fds[0].fd = xsk->sfd;
+    fds[0].events = POLLIN;
+
+    for (;;) {
+        int ret = poll(fds, 1, 1000);
+        if (ret <= 0) {
+            continue;
+        }
+
+        struct xdp_desc descs[BATCH_SIZE];
+        uint32_t rcvd = xq_deq(&xsk->rx, descs, BATCH_SIZE);
+        if (!rcvd) {
+            continue;
+        }
+
+        for (uint32_t c = 0; c < rcvd; c++) {
+            uint8_t *pkt = xq_get_data(xsk, descs[c].addr);
+            hex_dump(pkt, descs[c].len, descs[c].addr);
+        }
+
+        umem_fill_to_kernel_ex(&xsk->umem->fq, descs, rcvd);
+    }
+}
+
+void xsk_cache_run(struct xdp_sock *xsk) {
+    pthread_t pt;
+    xassert(pthread_create(&pt, NULL, xsk_log_and_drop, xsk) == 0);
 }
 
 struct xdp_umem *xdp_umem_configure(int sfd) {
@@ -121,7 +260,7 @@ struct xdp_umem *xdp_umem_configure(int sfd) {
 
     struct xdp_umem *umem = calloc(1, sizeof(struct xdp_umem));
     void *bufs;
-    posix_memalign(&bufs, getpagesize(), NUM_FRAMES * FRAME_SIZE);
+    xassert(posix_memalign(&bufs, getpagesize(), NUM_FRAMES * FRAME_SIZE) == 0);
 
     mr.addr = (uint64_t)bufs;
     mr.len = NUM_FRAMES * FRAME_SIZE;
@@ -222,7 +361,10 @@ struct xdp_sock *xsk_configure(struct xdp_umem *umem, int ifindex) {
 	return xsk;
 }
 
-int load_skb_program(const char *ifname, int ifindex, int xsk_map_fd) {
+void load_skb_program(const char *ifname, int ifindex, int xsk_map_fd) {
     struct xdp_sock *xsk = xsk_configure(NULL, ifindex);
-    return 0;
+    uint32_t key = 0;
+    xassert(bpf_map_update_elem(xsk_map_fd, &key, &xsk->sfd, BPF_ANY) == 0);
+
+    xsk_cache_run(xsk);
 }

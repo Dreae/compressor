@@ -245,13 +245,17 @@ int xdp_program(struct xdp_md *ctx) {
                     return XDP_DROP;
                 }
 
+                if (ntohs(udph->source) == 1337) {
+                    return bpf_redirect_map(&xsk_map, 0, 0);
+                }
+
                 if (ntohs(udph->source) == rule->to_port) {
                     uint64_t *udpdata = data + sizeof(struct ethhdr) + sizeof(struct iphdr) + sizeof(struct udphdr);
                     if (udpdata + 1 > (uint64_t *)data_end) {
                         goto cont;
                     } 
                     if (((*udpdata) & 0xffffffffff000000) == 0xffffffff49000000 && rule->a2s_info_cache) {
-                        return XDP_PASS;    
+                        return bpf_redirect_map(&xsk_map, 0, 0);    
                     }
 
 cont:

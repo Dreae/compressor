@@ -132,9 +132,7 @@ int main(int argc, char **argv) {
             return res;
         }
 
-        if ((res = load_skb_program(interface, ifindex, res)) != 0) {
-            return res;
-        }
+        load_skb_program(interface, ifindex, res);
 
         free_array((void **)service_defs);
         free_array((void **)forwarding_rules);

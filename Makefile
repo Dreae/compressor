@@ -8,7 +8,7 @@ libbpf_objects += libbpf/src/libbpf.o libbpf/src/netlink.o libbpf/src/nlattr.o l
 CFLAGS += -Ilibbpf/src
 LDFLAGS += -lconfig -lpthread -lelf
 
-all: compressor compressor_filter compressor_cache
+all: compressor compressor_filter
 compressor: libbpf $(objects)
 	clang $(LDFLAGS) -o compressor $(libbpf_objects) $(objects)
 compressor_filter: src/compressor_filter_kern.o
