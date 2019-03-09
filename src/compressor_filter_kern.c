@@ -105,6 +105,14 @@ static __always_inline void update_udph_checksum(struct iphdr *iph, struct udphd
     udph->check = 0;
 }
 
+static __always_inline int check_srcds_header(const uint8_t *addr, uint8_t id) {
+    if ((*addr++) == 0xff && (*addr++) == 0xff && (*addr++) == 0xff && (*addr++) == 0xff && (*addr) == id) {
+        return 1;
+    }
+
+    return 0;
+}
+
 SEC("xdp_prog")
 int xdp_program(struct xdp_md *ctx) {
     void *data_end = (void *)(long)ctx->data_end;
@@ -141,9 +149,21 @@ int xdp_program(struct xdp_md *ctx) {
                     return XDP_DROP;
                 }
 
-                uint64_t *udpdata = data + sizeof(struct ethhdr) + sizeof(struct iphdr) + sizeof(struct udphdr);
-                if (!(udpdata + 1 > (uint64_t *)data_end)) {
-                    if (*udpdata == 0xffffffff54536f75 && rule->a2s_info_cache) {
+                // Drop zero length packets
+                // See https://wiki.alliedmods.net/SRCDS_Hardening#Force_fullupdate
+                if (udph->len == 0) {
+                    return XDP_DROP;
+                }
+
+                const uint8_t *udp_bytes = data + sizeof(struct ethhdr) + sizeof(struct iphdr) + sizeof(struct udphdr);
+                if (!(udp_bytes + 5 > (uint8_t *)data_end)) {
+                    // Drop A2C_PRINT
+                    // See https://wiki.alliedmods.net/SRCDS_Hardening#A2C_PRINT_Spam
+                    if (check_srcds_header(udp_bytes, 0x6c)) {
+                        return XDP_DROP;
+                    }
+
+                    if (check_srcds_header(udp_bytes, 0x54) && rule->a2s_info_cache) {
                         return bpf_redirect_map(&xsk_map, 0, 0);
                     }
                 }
@@ -253,9 +273,9 @@ int xdp_program(struct xdp_md *ctx) {
                 }
 
                 if (ntohs(udph->source) == rule->to_port) {
-                    uint64_t *udpdata = data + sizeof(struct ethhdr) + sizeof(struct iphdr) + sizeof(struct udphdr);
-                    if (!(udpdata + 1 > (uint64_t *)data_end)) {
-                        if (((*udpdata) & 0xffffffffff000000) == 0xffffffff49000000 && rule->a2s_info_cache) {
+                    uint8_t *udpdata = data + sizeof(struct ethhdr) + sizeof(struct iphdr) + sizeof(struct udphdr);
+                    if (!(udpdata + 5 > (uint8_t *)data_end)) {
+                        if (check_srcds_header(udpdata, 0x49) && rule->a2s_info_cache) {
                             return bpf_redirect_map(&xsk_map, 0, 0);
                         }
                     }
