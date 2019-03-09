@@ -9,11 +9,14 @@
 #include <libbpf.h>
 #include <linux/if_xdp.h>
 #include <linux/socket.h>
+#include <linux/if_link.h>
 #include <sys/mman.h>
 #include <unistd.h>
 #include <sys/resource.h>
 #include <stdlib.h>
 #include <pthread.h>
+#include <linux/bpf.h>
+#include <linux/bpf_common.h>
 
 #include "bpf_load.h"
 
@@ -127,9 +130,10 @@ struct xdp_umem *xdp_umem_configure(int sfd) {
 
     xassert(setsockopt(sfd, SOL_XDP, XDP_UMEM_REG, &mr, sizeof(mr)) == 0);
     xassert(setsockopt(sfd, SOL_XDP, XDP_UMEM_FILL_RING, &fq_size, sizeof(int)) == 0);
+    xassert(setsockopt(sfd, SOL_XDP, XDP_UMEM_COMPLETION_RING, &cq_size, sizeof(int)) == 0);
     xassert(getsockopt(sfd, SOL_XDP, XDP_MMAP_OFFSETS, &off, &optlen) == 0);
-    umem->fq.map = mmap(NULL, off.fr.desc + FQ_NUM_DESCS * sizeof(uint64_t), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_POPULATE, sfd, XDP_UMEM_PGOFF_FILL_RING);
-    xassert(umem->fq.map);
+    umem->fq.map = mmap(0, off.fr.desc + FQ_NUM_DESCS * sizeof(uint64_t), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_POPULATE, sfd, XDP_UMEM_PGOFF_FILL_RING);
+    xassert(umem->fq.map != MAP_FAILED);
 
     umem->fq.mask = FQ_NUM_DESCS - 1;
     umem->fq.size = FQ_NUM_DESCS;
@@ -138,8 +142,8 @@ struct xdp_umem *xdp_umem_configure(int sfd) {
     umem->fq.ring = umem->fq.map + off.fr.desc;
     umem->fq.cached_cons = FQ_NUM_DESCS;
 
-    umem->cq.map = mmap(NULL, off.cr.desc + CQ_NUM_DESCS * sizeof(uint64_t), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_POPULATE, sfd, XDP_UMEM_PGOFF_COMPLETION_RING);
-    xassert(umem->cq.map);
+    umem->cq.map = mmap(0, off.cr.desc + CQ_NUM_DESCS * sizeof(uint64_t), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_POPULATE, sfd, XDP_UMEM_PGOFF_COMPLETION_RING);
+    xassert(umem->cq.map != MAP_FAILED);
     umem->cq.mask = CQ_NUM_DESCS - 1;
     umem->cq.size = CQ_NUM_DESCS;
     umem->cq.producer = umem->cq.map + off.cr.producer;
@@ -158,9 +162,7 @@ struct xdp_sock *xsk_configure(struct xdp_umem *umem, int ifindex) {
     struct xdp_sock *xsk = calloc(1, sizeof(struct xdp_sock));
     
     int sfd = socket(AF_XDP, SOCK_RAW, 0);
-    if (!sfd) {
-        return 0;
-    }
+    xassert(sfd >= 0);
 
     xsk->sfd = sfd;
     xsk->outstanding_tx = 0;
@@ -177,17 +179,17 @@ struct xdp_sock *xsk_configure(struct xdp_umem *umem, int ifindex) {
     xassert(setsockopt(sfd, SOL_XDP, XDP_RX_RING, &ndescs, sizeof(int)) == 0);
     xassert(setsockopt(sfd, SOL_XDP, XDP_TX_RING, &ndescs, sizeof(int)) == 0);
     xassert(getsockopt(sfd, SOL_XDP, XDP_MMAP_OFFSETS, &off, &optlen) == 0);
-    xsk->rx.map = mmap(NULL, off.rx.desc + NUM_DESCS * sizeof(struct xdp_desc), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_POPULATE, sfd, XDP_PGOFF_RX_RING);
-    xsk->tx.map = mmap(NULL, off.tx.desc + NUM_DESCS * sizeof(struct xdp_desc), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_POPULATE, sfd, XDP_PGOFF_TX_RING);
-    
-    xassert(xsk->rx.map);
-    xassert(xsk->tx.map);
-
+    xsk->rx.map = mmap(0, off.rx.desc + NUM_DESCS * sizeof(struct xdp_desc), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_POPULATE, sfd, XDP_PGOFF_RX_RING);
+    xassert(xsk->rx.map != MAP_FAILED);
     if (!umem) {
         for (uint64_t i = 0; i < NUM_DESCS * FRAME_SIZE; i += FRAME_SIZE) {
             umem_fill_to_kernel(&xsk->umem->fq, &i, 1);
         }
     }
+
+    xsk->tx.map = mmap(0, off.tx.desc + NUM_DESCS * sizeof(struct xdp_desc), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_POPULATE, sfd, XDP_PGOFF_TX_RING);
+    xassert(xsk->tx.map != MAP_FAILED);
+
 
 
 	xsk->rx.mask = NUM_DESCS - 1;
@@ -203,7 +205,7 @@ struct xdp_sock *xsk_configure(struct xdp_umem *umem, int ifindex) {
 	xsk->tx.ring = xsk->tx.map + off.tx.desc;
 	xsk->tx.cached_cons = NUM_DESCS;
 
-    struct sockaddr_xdp sxdp;
+    struct sockaddr_xdp sxdp = {};
 	sxdp.sxdp_family = AF_XDP;
 	sxdp.sxdp_ifindex = ifindex;
 	sxdp.sxdp_queue_id = 0;
@@ -212,10 +214,10 @@ struct xdp_sock *xsk_configure(struct xdp_umem *umem, int ifindex) {
 		sxdp.sxdp_flags = XDP_SHARED_UMEM;
 		sxdp.sxdp_shared_umem_fd = umem->fd;
 	} else {
-		sxdp.sxdp_flags = 0;
+		sxdp.sxdp_flags = XDP_COPY;
 	}
 
-	bind(sfd, (struct sockaddr *)&sxdp, sizeof(sxdp));
+	xassert(bind(sfd, (struct sockaddr *)&sxdp, sizeof(sxdp)) == 0);
 
 	return xsk;
 }
