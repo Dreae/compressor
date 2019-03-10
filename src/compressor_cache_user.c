@@ -254,16 +254,14 @@ static inline int save_and_enq_info_response(struct xdp_sock *xsk, const struct 
     struct timespec tspec;
     clock_gettime(CLOCK_MONOTONIC, &tspec);
 
-    bpf_map_lookup_elem(a2s_cache_map_fd, &iph->saddr, &entry);
-
     uint16_t len = ntohs(udp_len);
 
     entry.udp_data = malloc(len);
     memcpy(entry.udp_data, udp_data, len);
     entry.len = len;
-    entry.age = tspec.tv_nsec;
-    printf("Updating cache for %x\n", iph->saddr);
-    xassert(bpf_map_update_elem(a2s_cache_map_fd, &iph->saddr, &entry, BPF_ANY) == 0);
+    entry.age = (tspec.tv_sec * 1e9) + tspec.tv_nsec;
+    entry.misses = 0;
+    bpf_map_update_elem(a2s_cache_map_fd, &iph->saddr, &entry, BPF_ANY);
 
     xq_enq(&xsk->tx, desc, 1);
     return 1;
@@ -271,11 +269,9 @@ static inline int save_and_enq_info_response(struct xdp_sock *xsk, const struct 
 
 static inline int load_and_enq_info_response(struct xdp_sock *xsk, struct xdp_desc *desc, struct iphdr *iph, uint8_t *udp_data, uint16_t *udp_len, uint8_t *pkt, uint8_t *pkt_end) {
     struct a2s_info_cache_entry entry;
-    printf("Looking up cache for %x\n", iph->saddr);
     bpf_map_lookup_elem(a2s_cache_map_fd, &iph->saddr, &entry);
 
     if (entry.udp_data) {
-        printf("Sending up cache for %x\n", iph->saddr);
         memcpy(udp_data, entry.udp_data, entry.len);
         int16_t len_diff = entry.len - (ntohs(*udp_len) - sizeof(struct udphdr));
         desc->len += len_diff;
@@ -284,6 +280,7 @@ static inline int load_and_enq_info_response(struct xdp_sock *xsk, struct xdp_de
         iph->tot_len = htons(desc->len - sizeof(struct ethhdr));
 
         update_iph_checksum(iph);
+        // FIXME: Calculate UDP checksum
         xq_enq(&xsk->tx, desc, 1);
 
         return 1;

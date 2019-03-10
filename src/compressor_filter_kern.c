@@ -168,8 +168,7 @@ int xdp_program(struct xdp_md *ctx) {
                     if (check_srcds_header(udp_bytes, 0x54) && rule->a2s_info_cache) {
                         struct a2s_info_cache_entry *entry = bpf_map_lookup_elem(&a2s_info_cache_map, &iph->daddr);
                         if (entry) {
-                            // TODO: This
-                            if (rule->a2s_info_cache/*(entry->misses > rule->a2s_info_cache || rule->a2s_info_cache == 1)*/ && /*bpf_ktime_get_ns() - entry->age < 6e10*/entry->age > 0) {
+                            if ((entry->misses > rule->a2s_info_cache || rule->a2s_info_cache == 1) && bpf_ktime_get_ns() - entry->age < 6e10) {
                                 // Set up address so all userspace needs to do is fill out the
                                 // data and retransmit
                                 uint32_t saddr = iph->saddr;
