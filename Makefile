@@ -5,7 +5,7 @@ objects += src/compressor.o src/compressor_filter_user.o src/config.o src/bpf_lo
 libbpf_objects += libbpf/src/bpf.o libbpf/src/btf.o libbpf/src/libbpf_errno.o libbpf/src/libbpf_probes.o
 libbpf_objects += libbpf/src/libbpf.o libbpf/src/netlink.o libbpf/src/nlattr.o libbpf/src/str_error.o
 
-CFLAGS += -Ilibbpf/src
+CFLAGS += -Ilibbpf/src -O2 -Wall -Werror
 LDFLAGS += -lconfig -lpthread -lelf
 
 all: compressor compressor_filter

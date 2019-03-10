@@ -5,6 +5,9 @@
         "if_link.h": "c",
         "in.h": "c",
         "types.h": "c",
-        "ipv6.h": "c"
+        "ipv6.h": "c",
+        "time.h": "c",
+        "net.h": "c",
+        "socket.h": "c"
     }
 }

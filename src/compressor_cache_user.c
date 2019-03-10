@@ -44,6 +44,7 @@
 #define FQ_NUM_DESCS 1024
 #define CQ_NUM_DESCS 1024
 #define barrier() __asm__ __volatile__("" : : : "memory")
+#define likely(x) __builtin_expect(!!(x), 1)
 
 #define xassert(expr)							\
     if (!(expr)) {						\
@@ -162,7 +163,7 @@ static inline int umem_fill_to_kernel(struct xdp_umem_uqueue *fq, __u64 *d, size
     return 0;
 }
 
-static inline uint32_t umem_complete_from_kernel(struct xdp_umem_uqueue *cq, uint64_t *d, size_t nb) {
+static inline uint32_t umem_complete_from_kernel(struct xdp_umem_uqueue *cq, __u64 *d, size_t nb) {
     uint32_t entries = umem_nb_avail(cq, nb);
 
     barrier();
@@ -249,6 +250,23 @@ static inline void *xq_get_data(struct xdp_sock *xsk, uint64_t addr) {
     return &xsk->umem->frames[addr];
 }
 
+static inline void kick_and_complete(struct xdp_sock *xsk) {
+    if (!xsk->outstanding_tx) {
+        return;
+    }
+
+    int ret = sendto(xsk->sfd, NULL, 0, MSG_DONTWAIT, NULL, 0);
+    if (ret >= 0 || errno == ENOBUFS || errno == EAGAIN || errno == EBUSY) {
+        __u64 descs[BATCH_SIZE];
+        size_t ndescs = (xsk->outstanding_tx > BATCH_SIZE) ? BATCH_SIZE : xsk->outstanding_tx;
+        uint32_t rcvd = umem_complete_from_kernel(&xsk->umem->cq, descs, ndescs);
+        if (rcvd > 0) {
+            umem_fill_to_kernel(&xsk->umem->fq, descs, rcvd);
+            xsk->outstanding_tx -= rcvd;
+        }
+    }
+}
+
 static inline int save_and_enq_info_response(struct xdp_sock *xsk, const struct xdp_desc *desc, struct iphdr *iph, uint8_t *udp_data, uint16_t udp_len, uint8_t *pkt, uint8_t *pkt_end) {
     struct a2s_info_cache_entry entry;
     struct timespec tspec;
@@ -264,6 +282,7 @@ static inline int save_and_enq_info_response(struct xdp_sock *xsk, const struct 
     bpf_map_update_elem(a2s_cache_map_fd, &iph->saddr, &entry, BPF_ANY);
 
     xq_enq(&xsk->tx, desc, 1);
+    xsk->outstanding_tx++;
     return 1;
 }
 
@@ -271,7 +290,7 @@ static inline int load_and_enq_info_response(struct xdp_sock *xsk, struct xdp_de
     struct a2s_info_cache_entry entry;
     bpf_map_lookup_elem(a2s_cache_map_fd, &iph->saddr, &entry);
 
-    if (entry.udp_data) {
+    if (likely(entry.udp_data)) {
         memcpy(udp_data, entry.udp_data, entry.len);
         int16_t len_diff = entry.len - (ntohs(*udp_len) - sizeof(struct udphdr));
         desc->len += len_diff;
@@ -282,6 +301,7 @@ static inline int load_and_enq_info_response(struct xdp_sock *xsk, struct xdp_de
         update_iph_checksum(iph);
         // FIXME: Calculate UDP checksum
         xq_enq(&xsk->tx, desc, 1);
+        xsk->outstanding_tx++;
 
         return 1;
     }
@@ -316,24 +336,24 @@ static void *xsk_dispatch_a2s_info(void *arg) {
             struct udphdr *udph = pkt + sizeof(struct ethhdr) + sizeof(struct iphdr);
             uint8_t *udp_data = pkt + sizeof(struct ethhdr) + sizeof(struct iphdr) + sizeof(struct udphdr);
             if (udph + 1 > (struct udphdr *)pkt_end || udp_data + 5 > (uint8_t *)pkt_end) {
-                umem_fill_to_kernel(&xsk->umem->fq, &descs[c].addr, 1);
+                umem_fill_to_kernel_ex(&xsk->umem->fq, &descs[c], 1);
             }
 
             udph->check = 0;
             if (check_srcds_header(udp_data, 0x49)) {
                 if (save_and_enq_info_response(xsk, &descs[c], iph, udp_data, udph->len, pkt, pkt_end)) {
-                    sendto(xsk->sfd, NULL, 0, MSG_DONTWAIT, NULL, 0);
                     continue;
                 }
-            } else if (check_srcds_header(udp_data, 0x54)) {
+            } else if (likely(check_srcds_header(udp_data, 0x54))) {
                 if (load_and_enq_info_response(xsk, &descs[c], iph, udp_data, &udph->len, pkt, pkt_end)) {
-                    sendto(xsk->sfd, NULL, 0, MSG_DONTWAIT, NULL, 0);
                     continue;
                 }
             }
             
-            umem_fill_to_kernel(&xsk->umem->fq, &descs[c].addr, 1);
+            umem_fill_to_kernel_ex(&xsk->umem->fq, &descs[c], 1);
         }
+
+        kick_and_complete(xsk);
     }
 }
 

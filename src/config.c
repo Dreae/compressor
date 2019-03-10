@@ -9,7 +9,6 @@
 struct service_def *parse_service(const char *service) {
     char buffer[128];
     strcpy(buffer, service);
-    struct service_def *ret;
 
     char *port = strtok(buffer, "/");
     char *proto = strtok(NULL, "/");
@@ -104,11 +103,16 @@ struct forwarding_rule *parse_forwarding_rule(config_setting_t *cfg_rule) {
         }
     }
 
-    const char *a2s_info_str;
     int a2s_info_cache = 0;
     int get_a2sinfo = config_setting_lookup_int(cfg_rule, "a2s_info_cache", &a2s_info_cache);
     if (get_a2sinfo == CONFIG_FALSE) {
         a2s_info_cache = 0;
+    }
+
+    int cache_time = 0;
+    int get_cachetime = config_setting_lookup_int(cfg_rule, "cache_time", &cache_time);
+    if (get_cachetime == CONFIG_FALSE) {
+        cache_time = 60;
     }
 
     struct forwarding_rule *rule = malloc(sizeof(struct forwarding_rule));
@@ -119,5 +123,7 @@ struct forwarding_rule *parse_forwarding_rule(config_setting_t *cfg_rule) {
     rule->to_port = dest_port;
     rule->steam_port = steam_port;
     rule->a2s_info_cache = a2s_info_cache;
+    // Convert to nanoseconds
+    rule->cache_time = cache_time * 1e9;
     return rule;
 }
