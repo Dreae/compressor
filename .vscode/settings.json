@@ -3,6 +3,8 @@
         "bpf.h": "c",
         "ip.h": "c",
         "if_link.h": "c",
-        "in.h": "c"
+        "in.h": "c",
+        "types.h": "c",
+        "ipv6.h": "c"
     }
 }

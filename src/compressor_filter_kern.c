@@ -7,8 +7,11 @@
 #include <linux/tcp.h>
 #include <linux/bpf_common.h>
 #include <stdint.h>
+#include <stdatomic.h>
 
 #include "config.h"
+#include "compressor_cache_user.h"
+#include "srcds_util.h"
 
 struct vlan_hdr {
     __be16 h_vlan_TCI;
@@ -73,6 +76,13 @@ struct bpf_map_def SEC("maps") xsk_map = {
     .max_entries = 4
 };
 
+struct bpf_map_def SEC("maps") a2s_info_cache_map = {
+    .type = BPF_MAP_TYPE_HASH,
+    .key_size = sizeof(uint32_t),
+    .value_size = sizeof(struct a2s_info_cache_entry),
+    .max_entries = 255
+};
+
 static __always_inline void swap_dest_src_hwaddr(void *data) {
     uint16_t *p = data;
     uint16_t dst[3];
@@ -103,14 +113,6 @@ static __always_inline void update_iph_checksum(struct iphdr *iph) {
 static __always_inline void update_udph_checksum(struct iphdr *iph, struct udphdr *udph, void *data_end) {
     // FIXME: calculate new UDP checksum
     udph->check = 0;
-}
-
-static __always_inline int check_srcds_header(const uint8_t *addr, uint8_t id) {
-    if ((*addr++) == 0xff && (*addr++) == 0xff && (*addr++) == 0xff && (*addr++) == 0xff && (*addr) == id) {
-        return 1;
-    }
-
-    return 0;
 }
 
 SEC("xdp_prog")
@@ -164,7 +166,29 @@ int xdp_program(struct xdp_md *ctx) {
                     }
 
                     if (check_srcds_header(udp_bytes, 0x54) && rule->a2s_info_cache) {
-                        return bpf_redirect_map(&xsk_map, 0, 0);
+                        struct a2s_info_cache_entry *entry = bpf_map_lookup_elem(&a2s_info_cache_map, &iph->daddr);
+                        if (entry) {
+                            // TODO: This
+                            if (rule->a2s_info_cache/*(entry->misses > rule->a2s_info_cache || rule->a2s_info_cache == 1)*/ && /*bpf_ktime_get_ns() - entry->age < 6e10*/entry->age > 0) {
+                                // Set up address so all userspace needs to do is fill out the
+                                // data and retransmit
+                                uint32_t saddr = iph->saddr;
+                                iph->saddr = iph->daddr;
+                                iph->daddr = saddr;
+                                uint16_t dest = udph->dest;
+                                udph->dest = udph->source;
+                                udph->source = dest;
+
+                                // We don't need to update checksums, since userspace will need to
+                                // either way
+
+                                swap_dest_src_hwaddr(data);
+
+                                return bpf_redirect_map(&xsk_map, 0, 0);
+                            }
+                            
+                            entry->misses++;
+                        }
                     }
                 }
 
@@ -273,15 +297,15 @@ int xdp_program(struct xdp_md *ctx) {
                 }
 
                 if (ntohs(udph->source) == rule->to_port) {
+                    if (ntohs(udph->source) != rule->bind_port) {
+                        udph->source = htons(rule->bind_port);
+                    }
+
                     uint8_t *udpdata = data + sizeof(struct ethhdr) + sizeof(struct iphdr) + sizeof(struct udphdr);
                     if (!(udpdata + 5 > (uint8_t *)data_end)) {
                         if (check_srcds_header(udpdata, 0x49) && rule->a2s_info_cache) {
                             return bpf_redirect_map(&xsk_map, 0, 0);
                         }
-                    }
-
-                    if (ntohs(udph->source) != rule->bind_port) {
-                        udph->source = htons(rule->bind_port);
                     }
                 }
 

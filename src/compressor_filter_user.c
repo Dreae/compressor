@@ -10,6 +10,7 @@
 #include <errno.h>
 
 #include "compressor_filter_user.h"
+#include "compressor_cache_user.h"
 #include "config.h"
 #include "bpf_load.h"
 
@@ -66,6 +67,12 @@ int load_xdp_prog(struct service_def **services, struct forwarding_rule **forwar
         return 0;
     }
     int xsk_map_fd = map_fd[5];
+
+    if(!map_fd[6]) {
+        fprintf(stderr, "Error finding A2S_INFO cache map in XDP program\n");
+        return 0;
+    }
+    a2s_cache_map_fd = map_fd[6];
 
     struct service_def *service;
     int idx = 0;
@@ -126,6 +133,23 @@ int load_xdp_prog(struct service_def **services, struct forwarding_rule **forwar
             fprintf(stderr, "Store forwarding IP map failed: (err:%d)\n", err);
             perror("bpf_map_update_elem");
             return 0;
+        }
+
+        if (rule->a2s_info_cache) {
+            struct a2s_info_cache_entry cache_entry = {
+                .age = 0,
+                .misses = 0,
+                .udp_data = NULL,
+                .len = 0
+            };
+
+            // A2S_INFO caching operates on the bind address
+            err = bpf_map_update_elem(a2s_cache_map_fd, &rule->bind_addr, &cache_entry, BPF_NOEXIST);
+            if (err) {
+                fprintf(stderr, "Error prepopulating A2S_INFO cache: (err:%d)\n", err);
+                perror("bpf_map_update_elem");
+                return 0;
+            }
         }
 
         idx++;

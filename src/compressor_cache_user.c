@@ -10,6 +10,9 @@
 #include <linux/if_xdp.h>
 #include <linux/socket.h>
 #include <linux/if_link.h>
+#include <linux/ip.h>
+#include <linux/if_ether.h>
+#include <linux/udp.h>
 #include <sys/mman.h>
 #include <unistd.h>
 #include <sys/resource.h>
@@ -18,8 +21,11 @@
 #include <linux/bpf.h>
 #include <linux/bpf_common.h>
 #include <poll.h>
+#include <time.h>
 
 #include "bpf_load.h"
+#include "srcds_util.h"
+#include "compressor_cache_user.h"
 
 #ifndef AF_XDP
 #define AF_XDP 44
@@ -85,6 +91,20 @@ struct xdp_sock {
     uint32_t outstanding_tx;
 };
 
+int a2s_cache_map_fd;
+
+static __always_inline void update_iph_checksum(struct iphdr *iph) {
+    uint16_t *next_iph_u16 = (uint16_t *)iph;
+    uint32_t csum = 0;
+    iph->check = 0;
+#pragma clang loop unroll(full)
+    for (uint32_t i = 0; i < sizeof(*iph) >> 1; i++) {
+        csum += *next_iph_u16++;
+    }
+
+    iph->check = ~((csum & 0xffff) + (csum >> 16));
+}
+
 static inline int umem_nb_free(struct xdp_umem_uqueue *q, uint32_t nb) {
     uint32_t free_entries = q->cached_cons - q->cached_prod;
 
@@ -125,7 +145,7 @@ static inline int umem_fill_to_kernel_ex(struct xdp_umem_uqueue *fq, struct xdp_
     return 0;
 }
 
-static inline int umem_fill_to_kernel(struct xdp_umem_uqueue *fq, uint64_t *d, size_t nb) {
+static inline int umem_fill_to_kernel(struct xdp_umem_uqueue *fq, __u64 *d, size_t nb) {
     if (umem_nb_free(fq, nb) < nb) {
         return -ENOSPC;
     }
@@ -186,11 +206,31 @@ static inline uint32_t xq_nb_free(struct xdp_uqueue *q, uint32_t ndescs) {
     return q->cached_cons - q->cached_prod;
 }
 
+static inline int xq_enq(struct xdp_uqueue *uq, const struct xdp_desc *descs, int ndescs) {
+    struct xdp_desc *r = uq->ring;
+
+    if (xq_nb_free(uq, ndescs) < ndescs) {
+        return -ENOSPC;
+    }
+
+    for (int i = 0; i < ndescs; i++) {
+        uint32_t idx = uq->cached_prod++ & uq->mask;
+
+        r[idx].addr = descs[i].addr;
+        r[idx].len = descs[i].len;
+    }
+
+    barrier();
+
+    *uq->producer = uq->cached_prod;
+    return 0;
+}
+
 static inline int xq_deq(struct xdp_uqueue *uq, struct xdp_desc *descs, int ndescs) {
     struct xdp_desc *r = uq->ring;
 
     uint32_t entries = xq_nb_avail(uq, ndescs);
-    
+
     barrier();
     for (uint32_t i = 0; i < entries; i++) {
         uint32_t idx = uq->cached_cons++ & uq->mask;
@@ -209,18 +249,50 @@ static inline void *xq_get_data(struct xdp_sock *xsk, uint64_t addr) {
     return &xsk->umem->frames[addr];
 }
 
-static void hex_dump(uint8_t *pkt, size_t length, uint64_t addr) {
-    const uint8_t *address = pkt;
-    pthread_t self = pthread_self();
-    printf("rcvd thread-%lu\nlength = %zu\n", self, length);
-    printf("addr=%lu | ", addr);
-    while (length-- > 0) {
-        printf("%02X ", *address++);
-    }
-    printf("\n");
-} 
+static inline int save_and_enq_info_response(struct xdp_sock *xsk, const struct xdp_desc *desc, struct iphdr *iph, uint8_t *udp_data, uint16_t udp_len, uint8_t *pkt, uint8_t *pkt_end) {
+    struct a2s_info_cache_entry entry;
+    struct timespec tspec;
+    clock_gettime(CLOCK_MONOTONIC, &tspec);
 
-static void *xsk_log_and_drop(void *arg) {
+    bpf_map_lookup_elem(a2s_cache_map_fd, &iph->saddr, &entry);
+
+    uint16_t len = ntohs(udp_len);
+
+    entry.udp_data = malloc(len);
+    memcpy(entry.udp_data, udp_data, len);
+    entry.len = len;
+    entry.age = tspec.tv_nsec;
+    printf("Updating cache for %x\n", iph->saddr);
+    xassert(bpf_map_update_elem(a2s_cache_map_fd, &iph->saddr, &entry, BPF_ANY) == 0);
+
+    xq_enq(&xsk->tx, desc, 1);
+    return 1;
+}
+
+static inline int load_and_enq_info_response(struct xdp_sock *xsk, struct xdp_desc *desc, struct iphdr *iph, uint8_t *udp_data, uint16_t *udp_len, uint8_t *pkt, uint8_t *pkt_end) {
+    struct a2s_info_cache_entry entry;
+    printf("Looking up cache for %x\n", iph->saddr);
+    bpf_map_lookup_elem(a2s_cache_map_fd, &iph->saddr, &entry);
+
+    if (entry.udp_data) {
+        printf("Sending up cache for %x\n", iph->saddr);
+        memcpy(udp_data, entry.udp_data, entry.len);
+        int16_t len_diff = entry.len - (ntohs(*udp_len) - sizeof(struct udphdr));
+        desc->len += len_diff;
+
+        *udp_len = htons(entry.len + sizeof(struct udphdr));
+        iph->tot_len = htons(desc->len - sizeof(struct ethhdr));
+
+        update_iph_checksum(iph);
+        xq_enq(&xsk->tx, desc, 1);
+
+        return 1;
+    }
+
+    return 0;
+}
+
+static void *xsk_dispatch_a2s_info(void *arg) {
     struct xdp_sock *xsk = (struct xdp_sock *)arg;
     struct pollfd fds[1];
     memset(fds, 0, sizeof(fds));
@@ -241,17 +313,36 @@ static void *xsk_log_and_drop(void *arg) {
         }
 
         for (uint32_t c = 0; c < rcvd; c++) {
-            uint8_t *pkt = xq_get_data(xsk, descs[c].addr);
-            hex_dump(pkt, descs[c].len, descs[c].addr);
-        }
+            void *pkt = xq_get_data(xsk, descs[c].addr);
+            void *pkt_end = pkt + descs[c].len;
+            struct iphdr *iph = pkt + sizeof(struct ethhdr);
+            struct udphdr *udph = pkt + sizeof(struct ethhdr) + sizeof(struct iphdr);
+            uint8_t *udp_data = pkt + sizeof(struct ethhdr) + sizeof(struct iphdr) + sizeof(struct udphdr);
+            if (udph + 1 > (struct udphdr *)pkt_end || udp_data + 5 > (uint8_t *)pkt_end) {
+                umem_fill_to_kernel(&xsk->umem->fq, &descs[c].addr, 1);
+            }
 
-        umem_fill_to_kernel_ex(&xsk->umem->fq, descs, rcvd);
+            udph->check = 0;
+            if (check_srcds_header(udp_data, 0x49)) {
+                if (save_and_enq_info_response(xsk, &descs[c], iph, udp_data, udph->len, pkt, pkt_end)) {
+                    sendto(xsk->sfd, NULL, 0, MSG_DONTWAIT, NULL, 0);
+                    continue;
+                }
+            } else if (check_srcds_header(udp_data, 0x54)) {
+                if (load_and_enq_info_response(xsk, &descs[c], iph, udp_data, &udph->len, pkt, pkt_end)) {
+                    sendto(xsk->sfd, NULL, 0, MSG_DONTWAIT, NULL, 0);
+                    continue;
+                }
+            }
+            
+            umem_fill_to_kernel(&xsk->umem->fq, &descs[c].addr, 1);
+        }
     }
 }
 
 void xsk_cache_run(struct xdp_sock *xsk) {
     pthread_t pt;
-    xassert(pthread_create(&pt, NULL, xsk_log_and_drop, xsk) == 0);
+    xassert(pthread_create(&pt, NULL, xsk_dispatch_a2s_info, xsk) == 0);
 }
 
 struct xdp_umem *xdp_umem_configure(int sfd) {
@@ -301,7 +392,7 @@ struct xdp_sock *xsk_configure(struct xdp_umem *umem, int ifindex) {
     static int ndescs = NUM_DESCS;
 
     struct xdp_sock *xsk = calloc(1, sizeof(struct xdp_sock));
-    
+
     int sfd = socket(AF_XDP, SOCK_RAW, 0);
     xassert(sfd >= 0);
 
@@ -313,7 +404,7 @@ struct xdp_sock *xsk_configure(struct xdp_umem *umem, int ifindex) {
     } else {
         xsk->umem = umem;
     }
-    
+
     struct xdp_mmap_offsets off;
     socklen_t optlen = sizeof(off);
 
@@ -323,7 +414,7 @@ struct xdp_sock *xsk_configure(struct xdp_umem *umem, int ifindex) {
     xsk->rx.map = mmap(0, off.rx.desc + NUM_DESCS * sizeof(struct xdp_desc), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_POPULATE, sfd, XDP_PGOFF_RX_RING);
     xassert(xsk->rx.map != MAP_FAILED);
     if (!umem) {
-        for (uint64_t i = 0; i < NUM_DESCS * FRAME_SIZE; i += FRAME_SIZE) {
+        for (__u64 i = 0; i < NUM_DESCS * FRAME_SIZE; i += FRAME_SIZE) {
             umem_fill_to_kernel(&xsk->umem->fq, &i, 1);
         }
     }
