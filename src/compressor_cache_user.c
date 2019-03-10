@@ -272,6 +272,11 @@ static inline int save_and_enq_info_response(struct xdp_sock *xsk, const struct 
     struct timespec tspec;
     clock_gettime(CLOCK_MONOTONIC, &tspec);
 
+    bpf_map_lookup_elem(a2s_cache_map_fd, &iph->saddr, &entry);
+    if (entry.udp_data) {
+        free(entry.udp_data);
+    }
+
     uint16_t len = ntohs(udp_len);
 
     entry.udp_data = malloc(len);
