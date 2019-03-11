@@ -468,7 +468,7 @@ struct xdp_sock *xsk_configure(struct xdp_umem *umem, int ifindex) {
 		sxdp.sxdp_flags = XDP_SHARED_UMEM;
 		sxdp.sxdp_shared_umem_fd = umem->fd;
 	} else {
-		sxdp.sxdp_flags = XDP_COPY;
+		sxdp.sxdp_flags = 0;
 	}
 
 	xassert(bind(sfd, (struct sockaddr *)&sxdp, sizeof(sxdp)) == 0);

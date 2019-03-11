@@ -168,7 +168,7 @@ int load_xdp_prog(struct service_def **services, struct forwarding_rule **forwar
     signal(SIGKILL, int_exit);
     atexit(cleanup_interface);
 
-    if (bpf_set_link_xdp_fd(ifindex, prog_fd[0], XDP_FLAGS_SKB_MODE) < 0) {
+    if (bpf_set_link_xdp_fd(ifindex, prog_fd[0], 0) < 0) {
         fprintf(stderr, "link set xdp failed\n");
         return 0;
     }
