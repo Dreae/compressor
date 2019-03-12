@@ -85,8 +85,8 @@ int main(int argc, char **argv) {
 
         long long rate_limit = 0;
         if (config_lookup_int64(&config, "ip_rate_limit", &rate_limit) == CONFIG_FALSE) {
-            rate_limit = 36000;
-            fprintf(stderr, "Warning: no rate limit set; defaulting to 36000\n");
+            rate_limit = 24000;
+            fprintf(stderr, "Warning: no rate limit set; defaulting to 24000\n");
         }
         cfg.rate_limit = rate_limit;
         cfg.new_conn_limit = new_conn_limit;

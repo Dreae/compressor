@@ -153,34 +153,42 @@ int xdp_program(struct xdp_md *ctx) {
     if (likely(eth->h_proto == htons(ETH_P_IP))) {
         struct iphdr *iph = data + sizeof(struct ethhdr);
         if(unlikely(iph + 1 > (struct iphdr *)data_end)) {
+            return XDP_DROP;
+        }
+
+        if (iph->saddr == cfg->bgp_peer) {
             return XDP_PASS;
         }
 
-        struct ip_addr_history *last_seen = bpf_map_lookup_elem(&rate_limit_map, &iph->saddr);
-        uint64_t now = bpf_ktime_get_ns();
-        if (!last_seen) {
-            uint32_t key = 0;
-            uint_fast64_t *new_ips = bpf_map_lookup_elem(&new_conn_map, &key);
-            if (!new_ips) {
-                return XDP_ABORTED;
-            }
+        struct forwarding_rule *rule = bpf_map_lookup_elem(&tunnel_map, &iph->saddr);
+        if (!rule) {
+            struct ip_addr_history *last_seen = bpf_map_lookup_elem(&rate_limit_map, &iph->saddr);
+            uint64_t now = bpf_ktime_get_ns();
+            if (!last_seen) {
 
-            *new_ips = *new_ips + 1;
-            if (*new_ips > cfg->new_conn_limit) {
-                return XDP_DROP;
-            }
+                uint32_t key = 0;
+                uint_fast64_t *new_ips = bpf_map_lookup_elem(&new_conn_map, &key);
+                if (!new_ips) {
+                    return XDP_ABORTED;
+                }
 
-            struct ip_addr_history new_entry = {
-                .last_seen = now,
-                .hits = 1
-            };
-            bpf_map_update_elem(&rate_limit_map, &iph->saddr, &new_entry, BPF_ANY);
-        } else {
-            last_seen->last_seen = now;
-            last_seen->hits++;
+                *new_ips = *new_ips + 1;
+                if (*new_ips > cfg->new_conn_limit) {
+                    return XDP_DROP;
+                }
 
-            if (last_seen->hits > cfg->rate_limit) {
-                return XDP_DROP;
+                struct ip_addr_history new_entry = {
+                    .last_seen = now,
+                    .hits = 1
+                };
+                bpf_map_update_elem(&rate_limit_map, &iph->saddr, &new_entry, BPF_ANY);
+            } else {
+                last_seen->last_seen = now;
+                last_seen->hits++;
+
+                if (last_seen->hits > cfg->rate_limit) {
+                    return XDP_DROP;
+                }
             }
         }
 
@@ -287,27 +295,21 @@ int xdp_program(struct xdp_md *ctx) {
             }
 
             uint8_t *value = bpf_map_lookup_elem(&udp_services, &dest);
-            if (value && *value == 0) {
-                return XDP_DROP;
+            if (value && *value == 1) {
+                return XDP_PASS;
             }
         } else if (iph->protocol == IPPROTO_TCP) {
-            if (iph->saddr == cfg->bgp_peer) {
-                return XDP_PASS;
-            }
-
             struct tcphdr *tcph = data + sizeof(struct ethhdr) + sizeof(struct iphdr);
             if (tcph + 1 > (struct tcphdr *)data_end) {
-                return XDP_PASS;
-            }
-
-            uint32_t dest = (uint32_t)htons(tcph->dest);
-            uint8_t *value = bpf_map_lookup_elem(&tcp_services, &dest);
-            if (value && *value == 0) {
                 return XDP_DROP;
             }
+
+            uint32_t dest = (uint32_t)ntohs(tcph->dest);
+            uint8_t *value = bpf_map_lookup_elem(&tcp_services, &dest);
+            if (value && *value == 1) {
+                return XDP_PASS;
+            }
         } else if (iph->protocol == IPPROTO_IPIP) {
-            uint32_t saddr = iph->saddr;
-            struct forwarding_rule *rule = bpf_map_lookup_elem(&tunnel_map, &saddr);
             if (!rule) {
                 return XDP_DROP;
             }
@@ -359,9 +361,13 @@ int xdp_program(struct xdp_md *ctx) {
 
             return XDP_TX;
         }
+
+        return XDP_DROP;
+    } else if (eth->h_proto == ETH_P_IPV6) {
+        return XDP_DROP;
     }
 
-    // FIXME: Figure out why default DROP kills SSH
+    // Allow other ether protocols, like ARP
     return XDP_PASS;
 }
 
