@@ -20,6 +20,7 @@
 #endif
 
 static void *(*bpf_map_lookup_elem)(void *map, void *key) = (void *) BPF_FUNC_map_lookup_elem;
+static int (*bpf_map_update_elem)(void *map, const void *key, const void *value, uint64_t flags) = (void *) BPF_FUNC_map_update_elem;
 static int (*bpf_xdp_adjust_head)(void *ctx, int offset) = (void *) BPF_FUNC_xdp_adjust_head;
 static int64_t (*bpf_csum_diff)(__be32 *from, uint32_t from_size, __be32 *to, uint32_t to_size, __wsum seed) = (void *) BPF_FUNC_csum_diff;
 static uint64_t (*bpf_ktime_get_ns)(void) = (void *) BPF_FUNC_ktime_get_ns;

@@ -23,7 +23,7 @@ static void int_exit(int sig) {
     exit(0);
 }
 
-int load_xdp_prog(struct service_def **services, struct forwarding_rule **forwarding, struct config *cfg) {
+struct compressor_maps *load_xdp_prog(struct service_def **services, struct forwarding_rule **forwarding, struct config *cfg) {
     char *filename = "/etc/compressor/compressor_filter_kern.o";
 
     if (load_bpf_file(filename)) {
@@ -72,7 +72,19 @@ int load_xdp_prog(struct service_def **services, struct forwarding_rule **forwar
         fprintf(stderr, "Error finding A2S_INFO cache map in XDP program\n");
         return 0;
     }
-    a2s_cache_map_fd = map_fd[6];
+    int a2s_cache_map_fd = map_fd[6];
+
+    if(!map_fd[7]) {
+        fprintf(stderr, "Error finding rate limit map in XDP program\n");
+        return 0;
+    }
+    int rate_limit_map_fd = map_fd[7];
+
+    if(!map_fd[8]) {
+        fprintf(stderr, "Error finding new connection map in XDP program\n");
+        return 0;
+    }
+    int new_conn_map_fd = map_fd[8];
 
     struct service_def *service;
     int idx = 0;
@@ -168,10 +180,16 @@ int load_xdp_prog(struct service_def **services, struct forwarding_rule **forwar
     signal(SIGKILL, int_exit);
     atexit(cleanup_interface);
 
-    if (bpf_set_link_xdp_fd(ifindex, prog_fd[0], 0) < 0) {
+    if (bpf_set_link_xdp_fd(ifindex, prog_fd[0], XDP_FLAGS_SKB_MODE) < 0) {
         fprintf(stderr, "link set xdp failed\n");
         return 0;
     }
 
-    return xsk_map_fd;
+    struct compressor_maps *maps = malloc(sizeof(struct compressor_maps));
+    maps->a2s_cache_map_fd = a2s_cache_map_fd;
+    maps->xsk_map_fd = xsk_map_fd;
+    maps->rate_limit_map_fd = rate_limit_map_fd;
+    maps->new_conn_map_fd = new_conn_map_fd;
+
+    return maps;
 }

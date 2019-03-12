@@ -14,6 +14,7 @@
 #include <linux/if_ether.h>
 #include <linux/udp.h>
 #include <sys/mman.h>
+#include <asm-generic/mman.h>
 #include <unistd.h>
 #include <sys/resource.h>
 #include <stdlib.h>
@@ -26,6 +27,7 @@
 #include "bpf_load.h"
 #include "srcds_util.h"
 #include "compressor_cache_user.h"
+#include "xassert.h"
 
 #ifndef AF_XDP
 #define AF_XDP 44
@@ -45,15 +47,6 @@
 #define CQ_NUM_DESCS 1024
 #define barrier() __asm__ __volatile__("" : : : "memory")
 #define likely(x) __builtin_expect(!!(x), 1)
-
-#define xassert(expr)							\
-    if (!(expr)) {						\
-        fprintf(stderr, "%s:%s:%i: Assertion failed: "	\
-            #expr ": errno: %d/\"%s\"\n",		\
-            __FILE__, __func__, __LINE__,		\
-            errno, strerror(errno));		\
-        exit(EXIT_FAILURE);				\
-    }							\
 
 struct xdp_umem_uqueue {
     uint32_t cached_prod;
@@ -92,7 +85,7 @@ struct xdp_sock {
     uint32_t outstanding_tx;
 };
 
-int a2s_cache_map_fd;
+static int a2s_cache_map_fd;
 
 static __always_inline void update_iph_checksum(struct iphdr *iph) {
     uint16_t *next_iph_u16 = (uint16_t *)iph;
@@ -476,7 +469,9 @@ struct xdp_sock *xsk_configure(struct xdp_umem *umem, int ifindex) {
 	return xsk;
 }
 
-void load_skb_program(const char *ifname, int ifindex, int xsk_map_fd) {
+void load_skb_program(const char *ifname, int ifindex, int xsk_map_fd, int a2s_info_cache_map_fd) {
+    a2s_cache_map_fd = a2s_info_cache_map_fd;
+    
     struct xdp_sock *xsk = xsk_configure(NULL, ifindex);
     uint32_t key = 0;
     xassert(bpf_map_update_elem(xsk_map_fd, &key, &xsk->sfd, BPF_ANY) == 0);

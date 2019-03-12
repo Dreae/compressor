@@ -11,6 +11,7 @@
 
 #include "config.h"
 #include "compressor_cache_user.h"
+#include "compressor_ratelimit_user.h"
 #include "srcds_util.h"
 
 struct vlan_hdr {
@@ -76,11 +77,28 @@ struct bpf_map_def SEC("maps") xsk_map = {
     .max_entries = 4
 };
 
+// Map 6
 struct bpf_map_def SEC("maps") a2s_info_cache_map = {
     .type = BPF_MAP_TYPE_HASH,
     .key_size = sizeof(uint32_t),
     .value_size = sizeof(struct a2s_info_cache_entry),
     .max_entries = 255
+};
+
+// Map 7
+struct bpf_map_def SEC("maps") rate_limit_map = {
+    .type = BPF_MAP_TYPE_HASH,
+    .key_size = sizeof(uint32_t),
+    .value_size = sizeof(struct ip_addr_history),
+    .max_entries = 524280
+};
+
+// Map 8
+struct bpf_map_def SEC("maps") new_conn_map = {
+    .type = BPF_MAP_TYPE_ARRAY,
+    .key_size = sizeof(uint32_t),
+    .value_size = sizeof(uint_fast64_t),
+    .max_entries = 1
 };
 
 static __always_inline void swap_dest_src_hwaddr(void *data) {
@@ -134,8 +152,36 @@ int xdp_program(struct xdp_md *ctx) {
 
     if (likely(eth->h_proto == htons(ETH_P_IP))) {
         struct iphdr *iph = data + sizeof(struct ethhdr);
-        if(iph + 1 > (struct iphdr *)data_end) {
+        if(unlikely(iph + 1 > (struct iphdr *)data_end)) {
             return XDP_PASS;
+        }
+
+        struct ip_addr_history *last_seen = bpf_map_lookup_elem(&rate_limit_map, &iph->saddr);
+        uint64_t now = bpf_ktime_get_ns();
+        if (!last_seen) {
+            uint32_t key = 0;
+            uint_fast64_t *new_ips = bpf_map_lookup_elem(&new_conn_map, &key);
+            if (!new_ips) {
+                return XDP_ABORTED;
+            }
+
+            *new_ips = *new_ips + 1;
+            if (*new_ips > cfg->new_conn_limit) {
+                return XDP_DROP;
+            }
+
+            struct ip_addr_history new_entry = {
+                .last_seen = now,
+                .hits = 1
+            };
+            bpf_map_update_elem(&rate_limit_map, &iph->saddr, &new_entry, BPF_ANY);
+        } else {
+            last_seen->last_seen = now;
+            last_seen->hits++;
+
+            if (last_seen->hits > cfg->rate_limit) {
+                return XDP_DROP;
+            }
         }
 
         if (iph->protocol == IPPROTO_UDP) {

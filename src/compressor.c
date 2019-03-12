@@ -14,6 +14,7 @@
 int ifindex;
 #include "compressor_filter_user.h"
 #include "compressor_cache_user.h"
+#include "compressor_ratelimit_user.h"
 
 int get_iface_mac_address(const char *interface, uint16_t *addr) {
     char filename[256];
@@ -75,6 +76,21 @@ int main(int argc, char **argv) {
             return 1;
         }
 
+        struct config cfg = { 0 };
+        long long new_conn_limit = 0;
+        if (config_lookup_int64(&config, "new_conn_limit", &new_conn_limit) == CONFIG_FALSE) {
+            new_conn_limit = 30;
+            fprintf(stderr, "Warning: no connection limit set; defaulting to 30\n");
+        }
+
+        long long rate_limit = 0;
+        if (config_lookup_int64(&config, "ip_rate_limit", &rate_limit) == CONFIG_FALSE) {
+            rate_limit = 36000;
+            fprintf(stderr, "Warning: no rate limit set; defaulting to 36000\n");
+        }
+        cfg.rate_limit = rate_limit;
+        cfg.new_conn_limit = new_conn_limit;
+
         config_setting_t *services = config_lookup(&config, "services");
         struct service_def **service_defs = calloc(65535 * 2, sizeof(struct service_def *));
         if (services) {
@@ -123,16 +139,17 @@ int main(int argc, char **argv) {
             perror("Error getting mac address");
             return 1;
         }
-        struct config cfg = { 0 };
         cfg.hw1 = htons(hwaddr[0]);
         cfg.hw2 = htons(hwaddr[1]);
         cfg.hw3 = htons(hwaddr[2]);
 
-        if (!(res = load_xdp_prog(service_defs, forwarding_rules, &cfg))) {
-            return res;
+        struct compressor_maps *maps;
+        if (!(maps = load_xdp_prog(service_defs, forwarding_rules, &cfg))) {
+            return 1;
         }
 
-        load_skb_program(interface, ifindex, res);
+        load_skb_program(interface, ifindex, maps->xsk_map_fd, maps->a2s_cache_map_fd);
+        start_rlimit_mon(maps->rate_limit_map_fd, maps->new_conn_map_fd);
 
         free_array((void **)service_defs);
         free_array((void **)forwarding_rules);
