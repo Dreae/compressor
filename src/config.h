@@ -2,6 +2,7 @@
 
 #include <stdint.h>
 #include <libconfig.h>
+#include <linux/in.h>
 
 struct config {
     uint16_t hw1;
@@ -27,3 +28,4 @@ struct forwarding_rule {
 
 struct service_def *parse_service(const char *service);
 struct forwarding_rule *parse_forwarding_rule(config_setting_t *cfg_rule);
+struct in_addr **parse_ip_whitelist(config_setting_t *whitelist);

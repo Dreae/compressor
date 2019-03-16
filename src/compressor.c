@@ -128,6 +128,9 @@ int main(int argc, char **argv) {
             }
         }
 
+        config_setting_t *whitelist = config_lookup(&config, "ip_whitelist");
+        struct in_addr **whitelisted_ips = parse_ip_whitelist(whitelist);
+
         ifindex = if_nametoindex(interface);
         if (!ifindex) {
             perror("Error getting interface");
@@ -144,7 +147,7 @@ int main(int argc, char **argv) {
         cfg.hw3 = htons(hwaddr[2]);
 
         struct compressor_maps *maps;
-        if (!(maps = load_xdp_prog(service_defs, forwarding_rules, &cfg))) {
+        if (!(maps = load_xdp_prog(service_defs, forwarding_rules, whitelisted_ips, &cfg))) {
             return 1;
         }
 
@@ -153,6 +156,9 @@ int main(int argc, char **argv) {
 
         free_array((void **)service_defs);
         free_array((void **)forwarding_rules);
+        if (whitelisted_ips) {
+            free_array((void **)whitelisted_ips);
+        }
         config_destroy(&config);
     } else {
         perror("Error reading configuration file");

@@ -14,11 +14,6 @@
 #include "compressor_ratelimit_user.h"
 #include "srcds_util.h"
 
-struct vlan_hdr {
-    __be16 h_vlan_TCI;
-    __be16 h_vlan_encapsulated_proto;
-};
-
 struct bpf_map_def {
     unsigned int type;
     unsigned int key_size;
@@ -101,6 +96,14 @@ struct bpf_map_def SEC("maps") new_conn_map = {
     .max_entries = 1
 };
 
+// Map 9
+struct bpf_map_def SEC("maps") ip_whitelist_map = {
+    .type = BPF_MAP_TYPE_HASH,
+    .key_size = sizeof(uint32_t),
+    .value_size = sizeof(uint8_t),
+    .max_entries = 65565
+};
+
 static __always_inline void swap_dest_src_hwaddr(void *data) {
     uint16_t *p = data;
     uint16_t dst[3];
@@ -133,6 +136,43 @@ static __always_inline void update_udph_checksum(struct iphdr *iph, struct udphd
     udph->check = 0;
 }
 
+static __always_inline int forward_packet(struct xdp_md *ctx, struct forwarding_rule *rule) {
+    // Rule found, add outer IP frame
+        if (bpf_xdp_adjust_head(ctx, 0 - (int)sizeof(struct iphdr))) {
+            return XDP_ABORTED;
+        }
+
+        void *data_end = (void *)(long)ctx->data_end;
+        void *data = (void *)(long)ctx->data;
+        struct ethhdr *new_eth = data;
+        struct iphdr *new_iph = data + sizeof(struct ethhdr);
+        struct ethhdr *old_eth = data + sizeof(struct iphdr);
+        struct iphdr *iph = data + sizeof(struct ethhdr) + sizeof(struct iphdr);
+        if (new_eth + 1 > (struct ethhdr *)data_end || old_eth + 1 > (struct ethhdr *)data_end || new_iph + 1 > (struct iphdr *)data_end || iph + 1 > (struct iphdr *)data_end) {
+            return XDP_DROP;
+        }
+
+        // Ethernet header and IP header are the same size,
+        // move the Ethernet header to the front of the newly
+        // created space and add a new IP header in its place
+        __builtin_memcpy(new_eth, old_eth, sizeof(struct ethhdr));
+        new_iph->version = 4;
+        new_iph->ihl = sizeof(struct iphdr) >> 2;
+        new_iph->frag_off = 0;
+        new_iph->protocol = IPPROTO_IPIP;
+        new_iph->check = 0;
+        new_iph->ttl = 64;
+        new_iph->tos = 0;
+        new_iph->tot_len = htons(ntohs(iph->tot_len) + sizeof(struct iphdr));
+        new_iph->daddr = rule->to_addr;
+        new_iph->saddr = rule->bind_addr;
+        update_iph_checksum(new_iph);
+
+        swap_dest_src_hwaddr(data);
+
+        return XDP_TX;
+}
+
 SEC("xdp_prog")
 int xdp_program(struct xdp_md *ctx) {
     void *data_end = (void *)(long)ctx->data_end;
@@ -156,12 +196,13 @@ int xdp_program(struct xdp_md *ctx) {
             return XDP_DROP;
         }
 
-        if (iph->saddr == cfg->bgp_peer) {
-            return XDP_PASS;
+        uint8_t *ip_whitelisted = bpf_map_lookup_elem(&ip_whitelist_map, &iph->saddr);
+        if (!ip_whitelisted || !*ip_whitelisted) {
+            ip_whitelisted = NULL;
         }
-
-        struct forwarding_rule *rule = bpf_map_lookup_elem(&tunnel_map, &iph->saddr);
-        if (!rule) {
+        
+        struct forwarding_rule *tunnel_rule = bpf_map_lookup_elem(&tunnel_map, &iph->saddr);
+        if (!tunnel_rule) {
             struct ip_addr_history *last_seen = bpf_map_lookup_elem(&rate_limit_map, &iph->saddr);
             uint64_t now = bpf_ktime_get_ns();
             if (!last_seen) {
@@ -192,6 +233,7 @@ int xdp_program(struct xdp_md *ctx) {
             }
         }
 
+        struct forwarding_rule *forward_rule = bpf_map_lookup_elem(&forwarding_map, &iph->daddr);
         if (iph->protocol == IPPROTO_UDP) {
             struct udphdr *udph = data + sizeof(struct ethhdr) + sizeof(struct iphdr);
             if (udph + 1 > (struct udphdr *)data_end) {
@@ -199,9 +241,8 @@ int xdp_program(struct xdp_md *ctx) {
             }
 
             uint32_t dest = (uint32_t)ntohs(udph->dest);
-            struct forwarding_rule *rule = bpf_map_lookup_elem(&forwarding_map, &iph->daddr);
-            if (rule) {
-                if (udph->dest != htons(rule->bind_port) && udph->dest != htons(rule->steam_port) && iph->saddr != 0x08080808) {
+            if (forward_rule) {
+                if (udph->dest != htons(forward_rule->bind_port) && udph->dest != htons(forward_rule->steam_port) && !ip_whitelisted) {
                     return XDP_DROP;
                 }
 
@@ -219,10 +260,10 @@ int xdp_program(struct xdp_md *ctx) {
                         return XDP_DROP;
                     }
 
-                    if (check_srcds_header(udp_bytes, 0x54) && rule->a2s_info_cache) {
+                    if (check_srcds_header(udp_bytes, 0x54) && forward_rule->a2s_info_cache) {
                         struct a2s_info_cache_entry *entry = bpf_map_lookup_elem(&a2s_info_cache_map, &iph->daddr);
                         if (entry) {
-                            if ((entry->misses > rule->a2s_info_cache || rule->a2s_info_cache == 1) && bpf_ktime_get_ns() - entry->age < rule->cache_time) {
+                            if ((entry->misses > forward_rule->a2s_info_cache || forward_rule->a2s_info_cache == 1) && bpf_ktime_get_ns() - entry->age < forward_rule->cache_time) {
                                 // Set up address so all userspace needs to do is fill out the
                                 // data and retransmit
                                 uint32_t saddr = iph->saddr;
@@ -245,72 +286,52 @@ int xdp_program(struct xdp_md *ctx) {
                     }
                 }
 
-                // Rule found, add outer IP frame
-                if (bpf_xdp_adjust_head(ctx, 0 - (int)sizeof(struct iphdr))) {
-                    return XDP_ABORTED;
+                // Do port translation only if we know what the port is doing
+                if (dest == forward_rule->bind_port && forward_rule->bind_port != forward_rule->to_port) {
+                    udph->dest = htons(forward_rule->to_port);
                 }
 
-                data_end = (void *)(long)ctx->data_end;
-                data = (void *)(long)ctx->data;
-                struct ethhdr *new_eth = data;
-                struct iphdr *new_iph = data + sizeof(struct ethhdr);
-                struct ethhdr *old_eth = data + sizeof(struct iphdr);
-                iph = data + sizeof(struct ethhdr) + sizeof(struct iphdr);
-                if (new_eth + 1 > (struct ethhdr *)data_end || old_eth + 1 > (struct ethhdr *)data_end || new_iph + 1 > (struct iphdr *)data_end || iph + 1 > (struct iphdr *)data_end) {
-                    return XDP_DROP;
-                }
-
-                // Ethernet header and IP header are the same size,
-                // move the Ethernet header to the front of the newly
-                // created space and add a new IP header in its place
-                __builtin_memcpy(new_eth, old_eth, sizeof(struct ethhdr));
-                new_iph->version = 4;
-                new_iph->ihl = sizeof(struct iphdr) >> 2;
-                new_iph->frag_off = 0;
-                new_iph->protocol = IPPROTO_IPIP;
-                new_iph->check = 0;
-                new_iph->ttl = 64;
-                new_iph->tos = 0;
-                new_iph->tot_len = htons(ntohs(iph->tot_len) + sizeof(struct iphdr));
-                new_iph->daddr = rule->to_addr;
-                new_iph->saddr = rule->bind_addr;
-                update_iph_checksum(new_iph);
-
-                iph->daddr = rule->to_addr;
+                iph->daddr = forward_rule->to_addr;
                 update_iph_checksum(iph);
 
-                udph = data + sizeof(struct ethhdr) + (2 * sizeof(struct iphdr));
-                if (udph + 1 > (struct udphdr *)data_end) {
-                    return XDP_DROP;
-                }
-                // Do port translation only if we know what the port is doing
-                if (dest == rule->bind_port && rule->bind_port != rule->to_port) {
-                    udph->dest = htons(rule->to_port);
-                }
                 update_udph_checksum(iph, udph, data_end);
 
-                swap_dest_src_hwaddr(data);
-
-                return XDP_TX;
+                return forward_packet(ctx, forward_rule);
             }
 
-            uint8_t *value = bpf_map_lookup_elem(&udp_services, &dest);
-            if (value && *value == 1) {
+            if (ip_whitelisted) {
                 return XDP_PASS;
+            } else {
+                uint8_t *value = bpf_map_lookup_elem(&udp_services, &dest);
+                if (value && *value == 1) {
+                    return XDP_PASS;
+                }
             }
+
+            return XDP_DROP;
         } else if (iph->protocol == IPPROTO_TCP) {
             struct tcphdr *tcph = data + sizeof(struct ethhdr) + sizeof(struct iphdr);
             if (tcph + 1 > (struct tcphdr *)data_end) {
                 return XDP_DROP;
             }
 
-            uint32_t dest = (uint32_t)ntohs(tcph->dest);
-            uint8_t *value = bpf_map_lookup_elem(&tcp_services, &dest);
-            if (value && *value == 1) {
-                return XDP_PASS;
+            if (forward_rule && ip_whitelisted) {
+                return forward_packet(ctx, forward_rule);
             }
+
+            if (ip_whitelisted) {
+                return XDP_PASS;
+            } else {
+                uint32_t dest = (uint32_t)ntohs(tcph->dest);
+                uint8_t *value = bpf_map_lookup_elem(&tcp_services, &dest);
+                if (value && *value == 1) {
+                    return XDP_PASS;
+                }
+            }
+
+            return XDP_DROP;
         } else if (iph->protocol == IPPROTO_IPIP) {
-            if (!rule) {
+            if (!tunnel_rule) {
                 return XDP_DROP;
             }
 
@@ -334,7 +355,7 @@ int xdp_program(struct xdp_md *ctx) {
             __builtin_memcpy(new_eth, &old_eth, sizeof(struct ethhdr));
             swap_dest_src_hwaddr(data);
 
-            inner_ip->saddr = rule->bind_addr;
+            inner_ip->saddr = tunnel_rule->bind_addr;
             update_iph_checksum(inner_ip);
 
             if (inner_ip->protocol == IPPROTO_UDP) {
@@ -343,14 +364,14 @@ int xdp_program(struct xdp_md *ctx) {
                     return XDP_DROP;
                 }
 
-                if (ntohs(udph->source) == rule->to_port) {
-                    if (ntohs(udph->source) != rule->bind_port) {
-                        udph->source = htons(rule->bind_port);
+                if (ntohs(udph->source) == tunnel_rule->to_port) {
+                    if (ntohs(udph->source) != tunnel_rule->bind_port) {
+                        udph->source = htons(tunnel_rule->bind_port);
                     }
 
                     uint8_t *udpdata = data + sizeof(struct ethhdr) + sizeof(struct iphdr) + sizeof(struct udphdr);
                     if (!(udpdata + 5 > (uint8_t *)data_end)) {
-                        if (check_srcds_header(udpdata, 0x49) && rule->a2s_info_cache) {
+                        if (check_srcds_header(udpdata, 0x49) && tunnel_rule->a2s_info_cache) {
                             return bpf_redirect_map(&xsk_map, 0, 0);
                         }
                     }

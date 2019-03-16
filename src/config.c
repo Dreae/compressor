@@ -1,10 +1,10 @@
-#include "config.h"
 #include "compressor.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <arpa/inet.h>
+#include "config.h"
 
 struct service_def *parse_service(const char *service) {
     char buffer[128];
@@ -126,4 +126,39 @@ struct forwarding_rule *parse_forwarding_rule(config_setting_t *cfg_rule) {
     // Convert to nanoseconds
     rule->cache_time = cache_time * 1e9;
     return rule;
+}
+
+struct in_addr **parse_ip_whitelist(config_setting_t *whitelist) {
+    if (!whitelist) {
+        fprintf(stderr, "Warning: no IP whitelist found\n");
+        fprintf(stderr, "Whithout whitelisting at least a DNS service srcds will be unable to talk to Valve's master server\n");
+        return calloc(1, sizeof(void *));
+    }
+
+    if (config_setting_is_list(whitelist) == CONFIG_FALSE) {
+        fprintf(stderr, "Error: IP whitelist must be a list\n");
+        return calloc(1, sizeof(void *));
+    }
+
+    int len = config_setting_length(whitelist);
+    struct in_addr **array = calloc(len, sizeof(void *));
+    if (len != 0) {
+        int idx = 0;
+        for (int c = 0; c < len; c++) {
+            const char *ip = config_setting_get_string_elem(whitelist, c);
+            if (!ip) {
+                fprintf(stderr, "Error reading IP whitelist, element is null\n");
+                continue;
+            }
+            array[idx] = calloc(1, sizeof(struct in_addr));
+            if (!inet_aton(ip, array[idx])) {
+                fprintf(stderr, "Error parsing whitelisted IP %s\n", ip);
+                continue;
+            }
+            
+            idx++;
+        }
+    }
+
+    return array;
 }
