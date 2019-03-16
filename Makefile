@@ -23,7 +23,7 @@ clean:
 	rm -f compressor
 install:
 	mkdir -p /etc/compressor
-	cp compressor.example.conf /etc/compressor/compressor.conf
+	cp -n compressor.example.conf /etc/compressor/compressor.conf
 	cp src/compressor_filter_kern.o /etc/compressor/compressor_filter_kern.o
 	cp compressor /usr/bin/compressor
 

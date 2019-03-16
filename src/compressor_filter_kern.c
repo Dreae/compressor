@@ -196,9 +196,10 @@ int xdp_program(struct xdp_md *ctx) {
             return XDP_DROP;
         }
 
-        uint8_t *ip_whitelisted = bpf_map_lookup_elem(&ip_whitelist_map, &iph->saddr);
-        if (!ip_whitelisted || !*ip_whitelisted) {
-            ip_whitelisted = NULL;
+        uint8_t *whitelist_entry = bpf_map_lookup_elem(&ip_whitelist_map, &iph->saddr);
+        uint8_t ip_whitelisted = 0;
+        if (whitelist_entry) {
+            ip_whitelisted = *whitelist_entry;
         }
         
         struct forwarding_rule *tunnel_rule = bpf_map_lookup_elem(&tunnel_map, &iph->saddr);
