@@ -26,6 +26,7 @@ install:
 	cp -n compressor.example.conf /etc/compressor/compressor.conf
 	cp src/compressor_filter_kern.o /etc/compressor/compressor_filter_kern.o
 	cp compressor /usr/bin/compressor
+	cp -n systemd/compressor.service /etc/systemd/system/
 
 .PHONY: libbpf all
 .DEFAULT: all

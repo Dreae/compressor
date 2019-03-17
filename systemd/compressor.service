@@ -1,0 +1,11 @@
+[Unit]
+Description=XDP packet filtering for srcds
+After=network-online.target
+Requires=network-online.target
+
+[Service]
+ExecStart=/usr/bin/compressor
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
