@@ -154,7 +154,7 @@ struct in_addr **parse_ip_whitelist(config_setting_t *whitelist) {
     }
 
     int len = config_setting_length(whitelist);
-    struct in_addr **array = calloc(len, sizeof(void *));
+    struct in_addr **array = calloc(len + 1, sizeof(void *));
     if (len != 0) {
         int idx = 0;
         for (int c = 0; c < len; c++) {
