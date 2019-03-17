@@ -140,17 +140,22 @@ struct compressor_maps *load_xdp_prog(struct service_def **services, struct forw
         bind_addr.s_addr = rule->bind_addr;
         struct in_addr dest_addr;
         dest_addr.s_addr = rule->to_addr;
+        struct in_addr inner_addr;
+        inner_addr.s_addr = rule->inner_addr;
 
         char bind_str[32];
         char dest_str[32];
+        char inner_str[32];
         strcpy(bind_str, inet_ntoa(bind_addr));
         strcpy(dest_str, inet_ntoa(dest_addr));
+        strcpy(inner_str, inet_ntoa(inner_addr));
 
         printf(
-            "Adding forwarding rule %s:%d <--> %s:%d (%d, A2S_INFO cache: %s)\n",
+            "Adding forwarding rule %s:%d <--> %s[%s]:%d (%d, A2S_INFO cache: %s)\n",
             bind_str,
             rule->bind_port,
             dest_str,
+            inner_str,
             rule->to_port,
             rule->steam_port,
             rule->a2s_info_cache ? "on" : "off"

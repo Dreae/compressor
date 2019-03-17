@@ -70,7 +70,7 @@ struct forwarding_rule *parse_forwarding_rule(config_setting_t *cfg_rule) {
         return NULL;
     }
 
-    struct in_addr bind_inet;
+    struct in_addr bind_inet = { 0 };
     if (!inet_aton(bindaddr, &bind_inet)) {
         fprintf(stderr, "Error parsing ip address %s\n", bindaddr);
         return NULL;
@@ -81,11 +81,23 @@ struct forwarding_rule *parse_forwarding_rule(config_setting_t *cfg_rule) {
         return NULL;
     }
 
-    struct in_addr dest_inet;
+    struct in_addr dest_inet = { 0 };
     if (!inet_aton(destaddr, &dest_inet)) {
         fprintf(stderr, "Error parsing ip address %s\n", destaddr);
         return NULL;
     }
+
+    struct in_addr inner_inet = { 0 };
+    const char *inner_addr;
+    if (config_setting_lookup_string(cfg_rule, "internal_ip", &inner_addr) == CONFIG_TRUE) {
+        if (!inet_aton(inner_addr, &inner_inet)) {
+            fprintf(stderr, "Error parsing IP address %s\n", inner_addr);
+            return NULL;
+        }
+    } else {
+        inner_inet.s_addr = dest_inet.s_addr;
+    }
+
     uint16_t dest_port = atoi(destport);
     if (!dest_port) {
         fprintf(stderr, "Error parsing port %s\n", destport);
@@ -122,6 +134,7 @@ struct forwarding_rule *parse_forwarding_rule(config_setting_t *cfg_rule) {
     rule->to_addr = dest_inet.s_addr;
     rule->to_port = dest_port;
     rule->steam_port = steam_port;
+    rule->inner_addr = inner_inet.s_addr;
     rule->a2s_info_cache = a2s_info_cache;
     // Convert to nanoseconds
     rule->cache_time = cache_time * 1e9;

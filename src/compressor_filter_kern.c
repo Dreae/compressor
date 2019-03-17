@@ -292,7 +292,7 @@ int xdp_program(struct xdp_md *ctx) {
                     udph->dest = htons(forward_rule->to_port);
                 }
 
-                iph->daddr = forward_rule->to_addr;
+                iph->daddr = forward_rule->inner_addr;
                 update_iph_checksum(iph);
 
                 update_udph_checksum(iph, udph, data_end);
@@ -317,6 +317,9 @@ int xdp_program(struct xdp_md *ctx) {
             }
 
             if (forward_rule && ip_whitelisted) {
+                iph->daddr = forward_rule->inner_addr;
+                update_iph_checksum(iph);
+
                 return forward_packet(ctx, forward_rule);
             }
 

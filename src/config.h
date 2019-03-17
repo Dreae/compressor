@@ -20,6 +20,7 @@ struct forwarding_rule {
     uint32_t to_addr;
     uint16_t to_port;
     uint16_t steam_port;
+    uint32_t inner_addr;
 
     uint_fast32_t a2s_info_cache;
     uint_fast64_t cache_time;
