@@ -132,6 +132,28 @@ int main(int argc, char **argv) {
         config_setting_t *whitelist = config_lookup(&config, "ip_whitelist");
         struct in_addr **whitelisted_ips = parse_ip_whitelist(whitelist);
 
+        config_setting_t *redis = config_lookup(&config, "redis_cache");
+        uint32_t redis_addr = 0;
+        int redis_port = 0;
+        if (redis) {
+            const char *redis_addr_str;
+            if (config_setting_lookup_string(redis, "address", &redis_addr_str) == CONFIG_FALSE) {
+                fprintf(stderr, "Error reading redis config, no address defined\n");
+                return 1;
+            }
+            struct in_addr redis_in_addr;
+            if (!inet_aton(redis_addr_str, &redis_in_addr)) {
+                fprintf(stderr, "Error parsing redis address: %s", redis_addr_str);
+                return 1;
+            }
+            redis_addr = redis_in_addr.s_addr;
+
+            if (config_setting_lookup_int(redis, "port", &redis_port) == CONFIG_FALSE) {
+                fprintf(stderr, "Error reading redis config, no port defined\n");
+                return 1;
+            }
+        }
+
         ifindex = if_nametoindex(interface);
         if (!ifindex) {
             perror("Error getting interface");
@@ -153,7 +175,9 @@ int main(int argc, char **argv) {
         }
 
         load_skb_program(interface, ifindex, maps->xsk_map_fd, maps->a2s_cache_map_fd);
-        start_cache_seeding(maps->a2s_cache_map_fd, forwarding_rules);
+        if (redis_addr && redis_port) {
+            start_cache_seeding(maps->a2s_cache_map_fd, forwarding_rules, redis_addr, redis_port);
+        }
         start_rlimit_mon(maps->rate_limit_map_fd, maps->new_conn_map_fd);
 
         free_array((void **)service_defs);

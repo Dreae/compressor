@@ -7,7 +7,7 @@ libbpf_objects += libbpf/src/bpf.o libbpf/src/btf.o libbpf/src/libbpf_errno.o li
 libbpf_objects += libbpf/src/libbpf.o libbpf/src/netlink.o libbpf/src/nlattr.o libbpf/src/str_error.o
 
 CFLAGS += -Ilibbpf/src -O2 -Wall -Werror
-LDFLAGS += -lconfig -lpthread -lelf
+LDFLAGS += -lconfig -lpthread -lelf -lhiredis
 
 all: compressor compressor_filter
 compressor: libbpf $(objects)

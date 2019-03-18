@@ -8,6 +8,7 @@
         "ipv6.h": "c",
         "time.h": "c",
         "net.h": "c",
-        "socket.h": "c"
+        "socket.h": "c",
+        "wordsize.h": "c"
     }
 }
