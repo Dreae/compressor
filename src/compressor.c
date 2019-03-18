@@ -15,6 +15,7 @@ int ifindex;
 #include "compressor_filter_user.h"
 #include "compressor_cache_user.h"
 #include "compressor_ratelimit_user.h"
+#include "compressor_cache_seed.h"
 
 int get_iface_mac_address(const char *interface, uint16_t *addr) {
     char filename[256];
@@ -152,6 +153,7 @@ int main(int argc, char **argv) {
         }
 
         load_skb_program(interface, ifindex, maps->xsk_map_fd, maps->a2s_cache_map_fd);
+        start_cache_seeding(maps->a2s_cache_map_fd, forwarding_rules);
         start_rlimit_mon(maps->rate_limit_map_fd, maps->new_conn_map_fd);
 
         free_array((void **)service_defs);
