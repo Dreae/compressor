@@ -119,6 +119,23 @@ static __always_inline void swap_dest_src_hwaddr(void *data) {
     p[5] = dst[2];
 }
 
+static __always_inline uint16_t csum_fold_helper(uint32_t csum) {
+    uint32_t r = csum << 16 | csum >> 16;
+    csum = ~csum;
+    csum -= r;
+    return (uint16_t)(csum >> 16);
+}
+
+static __always_inline uint32_t csum_add(uint32_t addend, uint32_t csum) {
+    uint32_t res = csum;
+    res += addend;
+    return (res + (res < addend));
+}
+
+static __always_inline uint32_t csum_sub(uint32_t addend, uint32_t csum) {
+    return csum_add(csum, ~addend);
+}
+
 static __always_inline void update_iph_checksum(struct iphdr *iph) {
     uint16_t *next_iph_u16 = (uint16_t *)iph;
     uint32_t csum = 0;
@@ -131,9 +148,9 @@ static __always_inline void update_iph_checksum(struct iphdr *iph) {
     iph->check = ~((csum & 0xffff) + (csum >> 16));
 }
 
-static __always_inline void update_udph_checksum(struct iphdr *iph, struct udphdr *udph, void *data_end) {
-    // FIXME: calculate new UDP checksum
-    udph->check = 0;
+static __always_inline uint16_t csum_diff4(uint32_t from, uint32_t to, uint16_t csum) {
+    uint32_t tmp = csum_sub(from, ~((uint32_t)csum));
+    return csum_fold_helper(csum_add(to, tmp));
 }
 
 static __always_inline int forward_packet(struct xdp_md *ctx, struct forwarding_rule *rule) {
@@ -201,7 +218,7 @@ int xdp_program(struct xdp_md *ctx) {
         if (whitelist_entry) {
             ip_whitelisted = *whitelist_entry;
         }
-        
+
         struct forwarding_rule *tunnel_rule = bpf_map_lookup_elem(&tunnel_map, &iph->saddr);
         if (!tunnel_rule) {
             struct ip_addr_history *last_seen = bpf_map_lookup_elem(&rate_limit_map, &iph->saddr);
@@ -281,7 +298,7 @@ int xdp_program(struct xdp_md *ctx) {
 
                                 return bpf_redirect_map(&xsk_map, 0, 0);
                             }
-                            
+
                             entry->misses++;
                         }
                     }
@@ -289,13 +306,16 @@ int xdp_program(struct xdp_md *ctx) {
 
                 // Do port translation only if we know what the port is doing
                 if (dest == forward_rule->bind_port && forward_rule->bind_port != forward_rule->to_port) {
-                    udph->dest = htons(forward_rule->to_port);
+                    uint32_t old_dest = udph->dest;
+                    uint32_t new_dest = htons(forward_rule->to_port);
+                    udph->dest = new_dest;
+                    udph->check = csum_diff4(old_dest, new_dest, udph->check);
                 }
 
+                uint32_t daddr = iph->daddr;
                 iph->daddr = forward_rule->inner_addr;
                 update_iph_checksum(iph);
-
-                update_udph_checksum(iph, udph, data_end);
+                udph->check = csum_diff4(daddr, iph->daddr, udph->check);
 
                 return forward_packet(ctx, forward_rule);
             }
@@ -317,8 +337,10 @@ int xdp_program(struct xdp_md *ctx) {
             }
 
             if (forward_rule && ip_whitelisted) {
+                uint32_t daddr = iph->daddr;
                 iph->daddr = forward_rule->inner_addr;
                 update_iph_checksum(iph);
+                tcph->check = csum_diff4(daddr, iph->daddr, tcph->check);
 
                 return forward_packet(ctx, forward_rule);
             }
@@ -359,6 +381,7 @@ int xdp_program(struct xdp_md *ctx) {
             __builtin_memcpy(new_eth, &old_eth, sizeof(struct ethhdr));
             swap_dest_src_hwaddr(data);
 
+            uint32_t old_saddr = inner_ip->saddr;
             inner_ip->saddr = tunnel_rule->bind_addr;
             update_iph_checksum(inner_ip);
 
@@ -369,19 +392,29 @@ int xdp_program(struct xdp_md *ctx) {
                 }
 
                 if (ntohs(udph->source) == tunnel_rule->to_port) {
-                    if (ntohs(udph->source) != tunnel_rule->bind_port) {
-                        udph->source = htons(tunnel_rule->bind_port);
-                    }
-
                     uint8_t *udpdata = data + sizeof(struct ethhdr) + sizeof(struct iphdr) + sizeof(struct udphdr);
                     if (!(udpdata + 5 > (uint8_t *)data_end)) {
                         if (check_srcds_header(udpdata, 0x49) && tunnel_rule->a2s_info_cache) {
                             return bpf_redirect_map(&xsk_map, 0, 0);
                         }
                     }
+
+                    if (ntohs(udph->source) != tunnel_rule->bind_port) {
+                        uint32_t source = udph->source;
+                        uint32_t dest = ntohs(tunnel_rule->bind_port);
+                        udph->source = dest;
+                        udph->check = csum_diff4(source, dest, udph->check);
+                    }
                 }
 
-                update_udph_checksum(inner_ip, udph, data_end);
+                udph->check = csum_diff4(old_saddr, inner_ip->saddr, udph->check);
+            } else if (inner_ip->protocol == IPPROTO_TCP) {
+                struct tcphdr *tcph = data + sizeof(struct ethhdr) + sizeof(struct iphdr);
+                if (tcph + 1 > (struct tcphdr *)data_end) {
+                    return XDP_ABORTED;
+                }
+
+                tcph->check = csum_diff4(old_saddr, inner_ip->saddr, tcph->check);
             }
 
             return XDP_TX;
