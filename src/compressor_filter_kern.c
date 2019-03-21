@@ -85,7 +85,7 @@ struct bpf_map_def SEC("maps") rate_limit_map = {
     .type = BPF_MAP_TYPE_HASH,
     .key_size = sizeof(uint32_t),
     .value_size = sizeof(struct ip_addr_history),
-    .max_entries = 524280
+    .max_entries = 1048560
 };
 
 // Map 8
@@ -101,7 +101,7 @@ struct bpf_map_def SEC("maps") ip_whitelist_map = {
     .type = BPF_MAP_TYPE_HASH,
     .key_size = sizeof(uint32_t),
     .value_size = sizeof(uint8_t),
-    .max_entries = 65565
+    .max_entries = 524280
 };
 
 static __always_inline void swap_dest_src_hwaddr(void *data) {

@@ -175,3 +175,66 @@ struct in_addr **parse_ip_whitelist(config_setting_t *whitelist) {
 
     return array;
 }
+
+void add_all_prefixes(struct in_addr **ip_whitelist, uint32_t *asn_list);
+
+// So many stars
+void parse_asn_whitelist(config_setting_t *whitelist, struct in_addr ***ip_whitelist) {
+    if (config_setting_is_list(whitelist) == CONFIG_FALSE) {
+        fprintf(stderr, "Error: ASN whitelist must be a list\n");
+        return;
+    }
+
+    struct in_addr **old_whitelist = *ip_whitelist;
+    *ip_whitelist = calloc(524280, sizeof(void *));
+    int idx = 0;
+    while(old_whitelist[idx]) {
+        (*ip_whitelist)[idx] = old_whitelist[idx];
+        idx++;
+    }
+    free(old_whitelist);
+
+    int len = config_setting_length(whitelist);
+    uint32_t *asn_list = calloc(len + 1, sizeof(uint32_t));
+    int asn_idx = 0;
+    for (int c = 0; c < len; c++) {
+        const char *asn = config_setting_get_string_elem(whitelist, c);
+        char buffer[24];
+        strncpy(buffer, asn + 2, 24);
+        uint32_t asn_int = atol(buffer);
+        if (asn_int) {
+            printf("Whitelisting ASN AS%u\n", asn_int);
+            asn_list[asn_idx] = asn_int;
+            asn_idx++;
+        }
+    }
+
+    add_all_prefixes((*ip_whitelist) + idx, asn_list);
+}
+
+void add_all_prefixes(struct in_addr **ip_whitelist, uint32_t *asn_list) {
+    FILE *csv = fopen("/etc/compressor/maxmind_asn.csv", "r");
+    if (!csv) {
+        fprintf(stderr, "Error reading maxmind CSV\n");
+        perror("fopen()");
+        exit(1);
+    }
+
+    char line[255];
+    while (fgets(line, 255, csv)) {
+        char *prefix = strtok(line, ",");
+        char *asn = strtok(NULL, ",");
+
+        uint32_t as_int = atol(asn);
+        uint32_t current_asn;
+        int idx = 0;
+        while ((current_asn = asn_list[idx++]) != 0) {
+            if (as_int == current_asn) {
+                printf("Adding prefix %s\n", prefix);
+                // TODO: Finish this ._.
+            }
+        }
+    }
+
+    fclose(csv);
+}

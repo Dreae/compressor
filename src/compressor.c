@@ -16,6 +16,7 @@ int ifindex;
 #include "compressor_cache_user.h"
 #include "compressor_ratelimit_user.h"
 #include "compressor_cache_seed.h"
+#include "compressor_maxmind.h"
 
 int get_iface_mac_address(const char *interface, uint16_t *addr) {
     char filename[256];
@@ -40,17 +41,6 @@ int get_iface_mac_address(const char *interface, uint16_t *addr) {
 
     memcpy(addr, bytes, 6);
     return 1;
-}
-
-void free_array(void **array) {
-    void *elem;
-    int idx = 0;
-    while ((elem = array[idx]) != NULL) {
-        free(elem);
-        idx++;
-    }
-
-    free(array);
 }
 
 int main(int argc, char **argv) {
@@ -131,6 +121,12 @@ int main(int argc, char **argv) {
 
         config_setting_t *whitelist = config_lookup(&config, "ip_whitelist");
         struct in_addr **whitelisted_ips = parse_ip_whitelist(whitelist);
+
+        config_setting_t *asn_whitelist = config_lookup(&config, "asn_whitelist");
+        if (asn_whitelist) {
+            compressor_update_maxmind();
+            parse_asn_whitelist(asn_whitelist, &whitelisted_ips);
+        }
 
         config_setting_t *redis = config_lookup(&config, "redis_cache");
         uint32_t redis_addr = 0;

@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include <libconfig.h>
 #include <linux/in.h>
+#include <stdlib.h>
 
 struct config {
     uint16_t hw1;
@@ -30,3 +31,15 @@ struct forwarding_rule {
 struct service_def *parse_service(const char *service);
 struct forwarding_rule *parse_forwarding_rule(config_setting_t *cfg_rule);
 struct in_addr **parse_ip_whitelist(config_setting_t *whitelist);
+void parse_asn_whitelist(config_setting_t *whitelist, struct in_addr ***ip_whitelist);
+
+static inline void free_array(void **array) {
+    void *elem;
+    int idx = 0;
+    while ((elem = array[idx]) != NULL) {
+        free(elem);
+        idx++;
+    }
+
+    free(array);
+}
