@@ -1,3 +1,4 @@
 *.o
 *.bc
 /compressor
+/.vscode/ipch/

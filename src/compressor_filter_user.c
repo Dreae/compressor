@@ -121,9 +121,7 @@ struct compressor_maps *load_xdp_prog(struct service_def **services, struct forw
     struct in_addr *ip;
     idx = 0;
     while((ip = ip_whitelist[idx]) != NULL) {
-        printf("Whitelisting IP %s\n", inet_ntoa(*ip));
-
-        err = bpf_map_update_elem(ip_whitelist_map_fd, &ip->s_addr, &enable, BPF_NOEXIST);
+        err = bpf_map_update_elem(ip_whitelist_map_fd, &ip->s_addr, &enable, BPF_ANY);
         if (err) {
             fprintf(stderr, "Store whitelist IP map failed: (err:%d)\n", err);
             perror("bpf_map_update_elem");

@@ -27,7 +27,7 @@ struct service_def *parse_service(const char *service) {
         struct service_def *def = calloc(1, sizeof(struct service_def));
         def->port = iport;
         def->proto = PROTO_TCP;
-        
+
         return def;
     } else if (strcmp(proto, "udp") == 0) {
         struct service_def *def = calloc(1, sizeof(struct service_def));
@@ -168,7 +168,8 @@ struct in_addr **parse_ip_whitelist(config_setting_t *whitelist) {
                 fprintf(stderr, "Error parsing whitelisted IP %s\n", ip);
                 continue;
             }
-            
+            printf("Whitelisting IP %s\n", ip);
+
             idx++;
         }
     }
@@ -221,6 +222,7 @@ void add_all_prefixes(struct in_addr **ip_whitelist, uint32_t *asn_list) {
     }
 
     char line[255];
+    int ip_idx = 0;
     while (fgets(line, 255, csv)) {
         char *prefix = strtok(line, ",");
         char *asn = strtok(NULL, ",");
@@ -230,8 +232,27 @@ void add_all_prefixes(struct in_addr **ip_whitelist, uint32_t *asn_list) {
         int idx = 0;
         while ((current_asn = asn_list[idx++]) != 0) {
             if (as_int == current_asn) {
+                char prefix_cpy[24];
+                strncpy(prefix_cpy, prefix, 24);
+
+                struct in_addr start_ip;
+                char *block_start_str = strtok(prefix_cpy, "/");
+                char *bitmask_str = strtok(NULL, "/");
+                if (!block_start_str || !bitmask_str || !inet_aton(block_start_str, &start_ip)) {
+                    continue;
+                }
+
                 printf("Adding prefix %s\n", prefix);
-                // TODO: Finish this ._.
+                uint32_t bitmask = ~((1 << (32 - atoi(bitmask_str))) - 1);
+                uint32_t start = ntohl(start_ip.s_addr) & bitmask;
+                uint32_t end = start | ~bitmask;
+
+                while (start <= end) {
+                    ip_whitelist[ip_idx] = calloc(1, sizeof(struct in_addr));
+                    ip_whitelist[ip_idx]->s_addr = htonl(start);
+                    ip_idx++;
+                    start++;
+                }
             }
         }
     }
