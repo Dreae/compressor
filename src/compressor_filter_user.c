@@ -171,7 +171,7 @@ struct compressor_maps *load_xdp_prog(struct service_def **services, struct forw
             return 0;
         }
 
-        err = bpf_map_update_elem(known_hosts_map_fd, &rule->to_addr, rule, BPF_NOEXIST);
+        err = bpf_map_update_elem(known_hosts_map_fd, &rule->to_addr, &enable, BPF_NOEXIST);
         if (err) {
             fprintf(stderr, "Store known host IP map failed: (err:%d)\n", err);
             perror("bpf_map_update_elem");
@@ -179,7 +179,7 @@ struct compressor_maps *load_xdp_prog(struct service_def **services, struct forw
         }
 
         uint64_t key = ((uint64_t)rule->to_addr << 32) | rule->inner_addr;
-        err = bpf_map_update_elem(tunnel_map_fd, &key, &enable, BPF_NOEXIST);
+        err = bpf_map_update_elem(tunnel_map_fd, &key, rule, BPF_NOEXIST);
         if (err) {
             fprintf(stderr, "Store tunnel IP map failed: (err:%d)\n", err);
             perror("bpf_map_update_elem");
