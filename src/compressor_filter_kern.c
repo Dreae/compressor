@@ -153,7 +153,7 @@ static __always_inline uint16_t csum_diff4(uint32_t from, uint32_t to, uint16_t 
     return csum_fold_helper(csum_add(to, tmp));
 }
 
-static __always_inline int forward_packet(struct xdp_md *ctx, struct forwarding_rule *rule) {
+static __always_inline int forward_packet(struct xdp_md *ctx, struct forwarding_rule *rule, uint8_t tos) {
     // Rule found, add outer IP frame
         if (bpf_xdp_adjust_head(ctx, 0 - (int)sizeof(struct iphdr))) {
             return XDP_ABORTED;
@@ -179,7 +179,7 @@ static __always_inline int forward_packet(struct xdp_md *ctx, struct forwarding_
         new_iph->protocol = IPPROTO_IPIP;
         new_iph->check = 0;
         new_iph->ttl = 64;
-        new_iph->tos = 0;
+        new_iph->tos = tos;
         new_iph->tot_len = htons(ntohs(iph->tot_len) + sizeof(struct iphdr));
         new_iph->daddr = rule->to_addr;
         new_iph->saddr = rule->bind_addr;
@@ -317,7 +317,7 @@ int xdp_program(struct xdp_md *ctx) {
                 update_iph_checksum(iph);
                 udph->check = csum_diff4(daddr, iph->daddr, udph->check);
 
-                return forward_packet(ctx, forward_rule);
+                return forward_packet(ctx, forward_rule, 0x50);
             }
 
             if (ip_whitelisted) {
@@ -342,7 +342,7 @@ int xdp_program(struct xdp_md *ctx) {
                 update_iph_checksum(iph);
                 tcph->check = csum_diff4(daddr, iph->daddr, tcph->check);
 
-                return forward_packet(ctx, forward_rule);
+                return forward_packet(ctx, forward_rule, 0x00);
             }
 
             if (ip_whitelisted) {
@@ -383,7 +383,6 @@ int xdp_program(struct xdp_md *ctx) {
 
             uint32_t old_saddr = inner_ip->saddr;
             inner_ip->saddr = tunnel_rule->bind_addr;
-            update_iph_checksum(inner_ip);
 
             if (inner_ip->protocol == IPPROTO_UDP) {
                 struct udphdr *udph = data + sizeof(struct ethhdr) + sizeof(struct iphdr);
@@ -392,6 +391,7 @@ int xdp_program(struct xdp_md *ctx) {
                 }
 
                 if (ntohs(udph->source) == tunnel_rule->to_port) {
+                    inner_ip->tos = 0x50;
                     uint8_t *udpdata = data + sizeof(struct ethhdr) + sizeof(struct iphdr) + sizeof(struct udphdr);
                     if (!(udpdata + 5 > (uint8_t *)data_end)) {
                         if (check_srcds_header(udpdata, 0x49) && tunnel_rule->a2s_info_cache) {
@@ -417,6 +417,7 @@ int xdp_program(struct xdp_md *ctx) {
                 tcph->check = csum_diff4(old_saddr, inner_ip->saddr, tcph->check);
             }
 
+            update_iph_checksum(inner_ip);
             return XDP_TX;
         }
 
