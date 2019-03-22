@@ -56,10 +56,12 @@ struct bpf_map_def SEC("maps") forwarding_map = {
     .max_entries = 256
 };
 
+// Keyed by (dest_ip << 32) | internal_ip to support
+// multiple internal IPs on the same host
 // Map 4
 struct bpf_map_def SEC("maps") tunnel_map = {
     .type = BPF_MAP_TYPE_HASH,
-    .key_size = sizeof(uint32_t),
+    .key_size = sizeof(uint64_t),
     .value_size = sizeof(struct forwarding_rule),
     .max_entries = 256
 };
@@ -102,6 +104,16 @@ struct bpf_map_def SEC("maps") ip_whitelist_map = {
     .key_size = sizeof(uint32_t),
     .value_size = sizeof(uint8_t),
     .max_entries = 524280
+};
+
+// Reserved for a list of dest IPs to exclude game server hosts
+// from rate limiting
+// Map 10
+struct bpf_map_def SEC("maps") known_hosts = {
+    .type = BPF_MAP_TYPE_HASH,
+    .key_size = sizeof(uint32_t),
+    .value_size = sizeof(uint8_t),
+    .max_entries = 256
 };
 
 static __always_inline void swap_dest_src_hwaddr(void *data) {
@@ -219,8 +231,8 @@ int xdp_program(struct xdp_md *ctx) {
             ip_whitelisted = *whitelist_entry;
         }
 
-        struct forwarding_rule *tunnel_rule = bpf_map_lookup_elem(&tunnel_map, &iph->saddr);
-        if (!tunnel_rule) {
+        uint8_t *known_host = bpf_map_lookup_elem(&known_hosts, &iph->saddr);
+        if (!known_host || !(*known_host)) {
             struct ip_addr_history *last_seen = bpf_map_lookup_elem(&rate_limit_map, &iph->saddr);
             uint64_t now = bpf_ktime_get_ns();
             if (!last_seen) {
@@ -357,6 +369,13 @@ int xdp_program(struct xdp_md *ctx) {
 
             return XDP_DROP;
         } else if (iph->protocol == IPPROTO_IPIP) {
+            struct iphdr *inner_ip = data + sizeof(struct ethhdr) + sizeof(struct iphdr);
+            if (inner_ip + 1 > (struct iphdr *)data_end) {
+                return XDP_ABORTED;
+            }
+
+            uint64_t key = ((uint64_t)iph->saddr << 32) | inner_ip->saddr;
+            struct forwarding_rule *tunnel_rule = bpf_map_lookup_elem(&tunnel_map, &key);
             if (!tunnel_rule) {
                 return XDP_DROP;
             }
@@ -373,7 +392,7 @@ int xdp_program(struct xdp_md *ctx) {
             data = (void *)(long)ctx->data;
             data_end = (void *)(long)ctx->data_end;
             struct ethhdr *new_eth = data;
-            struct iphdr *inner_ip = data + sizeof(struct ethhdr);
+            inner_ip = data + sizeof(struct ethhdr);
 
             if (new_eth + 1 > (struct ethhdr *)data_end || inner_ip + 1 > (struct iphdr *)data_end) {
                 return XDP_DROP;

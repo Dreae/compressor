@@ -92,6 +92,12 @@ struct compressor_maps *load_xdp_prog(struct service_def **services, struct forw
     }
     int ip_whitelist_map_fd = map_fd[9];
 
+    if(!map_fd[10]) {
+        fprintf(stderr, "Error finding known host map in XDP program\n");
+        return 0;
+    }
+    int known_hosts_map_fd = map_fd[10];
+
     struct service_def *service;
     int idx = 0;
     uint8_t enable = 1;
@@ -164,9 +170,18 @@ struct compressor_maps *load_xdp_prog(struct service_def **services, struct forw
             perror("bpf_map_update_elem");
             return 0;
         }
-        err = bpf_map_update_elem(tunnel_map_fd, &rule->to_addr, rule, BPF_NOEXIST);
+
+        err = bpf_map_update_elem(known_hosts_map_fd, &rule->to_addr, rule, BPF_NOEXIST);
         if (err) {
-            fprintf(stderr, "Store forwarding IP map failed: (err:%d)\n", err);
+            fprintf(stderr, "Store known host IP map failed: (err:%d)\n", err);
+            perror("bpf_map_update_elem");
+            return 0;
+        }
+
+        uint64_t key = ((uint64_t)rule->to_addr << 32) | rule->inner_addr;
+        err = bpf_map_update_elem(tunnel_map_fd, &key, &enable, BPF_NOEXIST);
+        if (err) {
+            fprintf(stderr, "Store tunnel IP map failed: (err:%d)\n", err);
             perror("bpf_map_update_elem");
             return 0;
         }
