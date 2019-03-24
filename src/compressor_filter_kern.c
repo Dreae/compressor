@@ -122,7 +122,7 @@ struct bpf_map_def SEC("maps") ip_prefix_whitelist_map = {
     .type = BPF_MAP_TYPE_LPM_TRIE,
     .key_size = sizeof(struct lpm_trie_key),
     .value_size = sizeof(uint64_t),
-    .max_entries = 4096,
+    .max_entries = 16384,
     .map_flags = BPF_F_NO_PREALLOC
 };
 

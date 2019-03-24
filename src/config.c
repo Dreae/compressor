@@ -186,7 +186,7 @@ struct whitelisted_prefix **parse_asn_whitelist(config_setting_t *whitelist) {
         return calloc(1, sizeof(void *));
     }
 
-    struct whitelisted_prefix **prefixes = calloc(4096, sizeof(void *));
+    struct whitelisted_prefix **prefixes = calloc(16384, sizeof(void *));
     int len = config_setting_length(whitelist);
     uint32_t *asn_list = calloc(len + 1, sizeof(uint32_t));
     int asn_idx = 0;
