@@ -13,6 +13,7 @@
 #include "compressor_cache_user.h"
 #include "compressor_ratelimit_user.h"
 #include "srcds_util.h"
+#include "compressor_filter_user.h"
 
 struct bpf_map_def {
     unsigned int type;
@@ -103,7 +104,7 @@ struct bpf_map_def SEC("maps") ip_whitelist_map = {
     .type = BPF_MAP_TYPE_HASH,
     .key_size = sizeof(uint32_t),
     .value_size = sizeof(uint8_t),
-    .max_entries = 524280
+    .max_entries = 4096
 };
 
 // Reserved for a list of dest IPs to exclude game server hosts
@@ -114,6 +115,15 @@ struct bpf_map_def SEC("maps") known_hosts = {
     .key_size = sizeof(uint32_t),
     .value_size = sizeof(uint8_t),
     .max_entries = 256
+};
+
+// Map 11
+struct bpf_map_def SEC("maps") ip_prefix_whitelist_map = {
+    .type = BPF_MAP_TYPE_LPM_TRIE,
+    .key_size = sizeof(struct lpm_trie_key),
+    .value_size = sizeof(uint64_t),
+    .max_entries = 4096,
+    .map_flags = BPF_F_NO_PREALLOC
 };
 
 static __always_inline void swap_dest_src_hwaddr(void *data) {
@@ -229,6 +239,18 @@ int xdp_program(struct xdp_md *ctx) {
         uint8_t ip_whitelisted = 0;
         if (whitelist_entry) {
             ip_whitelisted = *whitelist_entry;
+        } else {
+            struct lpm_trie_key key;
+            key.prefixlen = 32;
+            key.data = iph->saddr;
+            uint64_t *prefix_mask = bpf_map_lookup_elem(&ip_prefix_whitelist_map, &key);
+            if (prefix_mask) {
+                uint32_t bitmask = (*prefix_mask) >> 32;
+                uint32_t prefix = (*prefix_mask) & 0xffffffff;
+                if ((iph->saddr & bitmask) == prefix) {
+                    ip_whitelisted = 1;
+                }
+            }
         }
 
         uint8_t *known_host = bpf_map_lookup_elem(&known_hosts, &iph->saddr);
@@ -263,8 +285,8 @@ int xdp_program(struct xdp_md *ctx) {
             }
         }
 
-        struct forwarding_rule *forward_rule = bpf_map_lookup_elem(&forwarding_map, &iph->daddr);
         if (iph->protocol == IPPROTO_UDP) {
+            struct forwarding_rule *forward_rule = bpf_map_lookup_elem(&forwarding_map, &iph->daddr);
             struct udphdr *udph = data + sizeof(struct ethhdr) + sizeof(struct iphdr);
             if (udph + 1 > (struct udphdr *)data_end) {
                 return XDP_PASS;
@@ -343,6 +365,7 @@ int xdp_program(struct xdp_md *ctx) {
 
             return XDP_DROP;
         } else if (iph->protocol == IPPROTO_TCP) {
+            struct forwarding_rule *forward_rule = bpf_map_lookup_elem(&forwarding_map, &iph->daddr);
             struct tcphdr *tcph = data + sizeof(struct ethhdr) + sizeof(struct iphdr);
             if (tcph + 1 > (struct tcphdr *)data_end) {
                 return XDP_DROP;

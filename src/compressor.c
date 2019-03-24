@@ -123,9 +123,10 @@ int main(int argc, char **argv) {
         struct in_addr **whitelisted_ips = parse_ip_whitelist(whitelist);
 
         config_setting_t *asn_whitelist = config_lookup(&config, "asn_whitelist");
+        struct whitelisted_prefix **whitelisted_prefixes;
         if (asn_whitelist) {
             compressor_update_maxmind();
-            parse_asn_whitelist(asn_whitelist, &whitelisted_ips);
+            whitelisted_prefixes = parse_asn_whitelist(asn_whitelist);
         }
 
         config_setting_t *redis = config_lookup(&config, "redis_cache");
@@ -166,7 +167,7 @@ int main(int argc, char **argv) {
         cfg.hw3 = htons(hwaddr[2]);
 
         struct compressor_maps *maps;
-        if (!(maps = load_xdp_prog(service_defs, forwarding_rules, whitelisted_ips, &cfg))) {
+        if (!(maps = load_xdp_prog(service_defs, forwarding_rules, whitelisted_ips, whitelisted_prefixes, &cfg))) {
             return 1;
         }
 
@@ -178,6 +179,7 @@ int main(int argc, char **argv) {
 
         free_array((void **)service_defs);
         free_array((void **)forwarding_rules);
+        free_array((void **)whitelisted_prefixes);
         if (whitelisted_ips) {
             free_array((void **)whitelisted_ips);
         }

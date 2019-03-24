@@ -177,24 +177,16 @@ struct in_addr **parse_ip_whitelist(config_setting_t *whitelist) {
     return array;
 }
 
-void add_all_prefixes(struct in_addr **ip_whitelist, uint32_t *asn_list);
+void add_all_prefixes(uint32_t *asn_list, struct whitelisted_prefix **prefixes);
 
 // So many stars
-void parse_asn_whitelist(config_setting_t *whitelist, struct in_addr ***ip_whitelist) {
+struct whitelisted_prefix **parse_asn_whitelist(config_setting_t *whitelist) {
     if (config_setting_is_list(whitelist) == CONFIG_FALSE) {
         fprintf(stderr, "Error: ASN whitelist must be a list\n");
-        return;
+        return calloc(1, sizeof(void *));
     }
 
-    struct in_addr **old_whitelist = *ip_whitelist;
-    *ip_whitelist = calloc(524280, sizeof(void *));
-    int idx = 0;
-    while(old_whitelist[idx]) {
-        (*ip_whitelist)[idx] = old_whitelist[idx];
-        idx++;
-    }
-    free(old_whitelist);
-
+    struct whitelisted_prefix **prefixes = calloc(4096, sizeof(void *));
     int len = config_setting_length(whitelist);
     uint32_t *asn_list = calloc(len + 1, sizeof(uint32_t));
     int asn_idx = 0;
@@ -210,10 +202,12 @@ void parse_asn_whitelist(config_setting_t *whitelist, struct in_addr ***ip_white
         }
     }
 
-    add_all_prefixes((*ip_whitelist) + idx, asn_list);
+    add_all_prefixes(asn_list, prefixes);
+
+    return prefixes;
 }
 
-void add_all_prefixes(struct in_addr **ip_whitelist, uint32_t *asn_list) {
+void add_all_prefixes(uint32_t *asn_list, struct whitelisted_prefix **prefixes) {
     FILE *csv = fopen("/etc/compressor/maxmind_asn.csv", "r");
     if (!csv) {
         fprintf(stderr, "Error reading maxmind CSV\n");
@@ -222,7 +216,7 @@ void add_all_prefixes(struct in_addr **ip_whitelist, uint32_t *asn_list) {
     }
 
     char line[255];
-    int ip_idx = 0;
+    int prefix_idx = 0;
     while (fgets(line, 255, csv)) {
         char *prefix = strtok(line, ",");
         char *asn = strtok(NULL, ",");
@@ -243,16 +237,14 @@ void add_all_prefixes(struct in_addr **ip_whitelist, uint32_t *asn_list) {
                 }
 
                 printf("Adding prefix %s\n", prefix);
-                uint32_t bitmask = ~((1 << (32 - atoi(bitmask_str))) - 1);
-                uint32_t start = ntohl(start_ip.s_addr) & bitmask;
-                uint32_t end = start | ~bitmask;
+                uint32_t bitmask = htonl(~((1 << (32 - atoi(bitmask_str))) - 1));
+                uint32_t start = start_ip.s_addr & bitmask;
 
-                while (start <= end) {
-                    ip_whitelist[ip_idx] = calloc(1, sizeof(struct in_addr));
-                    ip_whitelist[ip_idx]->s_addr = htonl(start);
-                    ip_idx++;
-                    start++;
-                }
+                prefixes[prefix_idx] = malloc(sizeof(struct whitelisted_prefix));
+                prefixes[prefix_idx]->bitmask = bitmask;
+                prefixes[prefix_idx]->prefix = start;
+                prefixes[prefix_idx]-> prefixlen = atoi(bitmask_str);
+                prefix_idx++;
             }
         }
     }

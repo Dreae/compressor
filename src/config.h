@@ -28,10 +28,16 @@ struct forwarding_rule {
 };
 
 
+struct whitelisted_prefix {
+    uint32_t bitmask;
+    uint32_t prefix;
+    uint32_t prefixlen;
+};
+
 struct service_def *parse_service(const char *service);
 struct forwarding_rule *parse_forwarding_rule(config_setting_t *cfg_rule);
 struct in_addr **parse_ip_whitelist(config_setting_t *whitelist);
-void parse_asn_whitelist(config_setting_t *whitelist, struct in_addr ***ip_whitelist);
+struct whitelisted_prefix **parse_asn_whitelist(config_setting_t *whitelist);
 
 static inline void free_array(void **array) {
     void *elem;
