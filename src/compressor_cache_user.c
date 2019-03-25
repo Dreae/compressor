@@ -28,6 +28,7 @@
 #include "srcds_util.h"
 #include "compressor_cache_user.h"
 #include "xassert.h"
+#include "checksum.h"
 
 #ifndef AF_XDP
 #define AF_XDP 44
@@ -86,18 +87,6 @@ struct xdp_sock {
 };
 
 static int a2s_cache_map_fd;
-
-static __always_inline void update_iph_checksum(struct iphdr *iph) {
-    uint16_t *next_iph_u16 = (uint16_t *)iph;
-    uint32_t csum = 0;
-    iph->check = 0;
-#pragma clang loop unroll(full)
-    for (uint32_t i = 0; i < sizeof(*iph) >> 1; i++) {
-        csum += *next_iph_u16++;
-    }
-
-    iph->check = ~((csum & 0xffff) + (csum >> 16));
-}
 
 static inline int umem_nb_free(struct xdp_umem_uqueue *q, uint32_t nb) {
     uint32_t free_entries = q->cached_cons - q->cached_prod;
@@ -260,7 +249,7 @@ static inline void kick_and_complete(struct xdp_sock *xsk) {
     }
 }
 
-static inline int save_and_enq_info_response(struct xdp_sock *xsk, const struct xdp_desc *desc, struct iphdr *iph, uint8_t *udp_data, uint16_t udp_len, uint8_t *pkt, uint8_t *pkt_end) {
+static inline int save_and_enq_info_response(struct xdp_sock *xsk, const struct xdp_desc *desc, struct iphdr *iph, struct udphdr *udph, uint8_t *udp_data, uint8_t *pkt, uint8_t *pkt_end) {
     struct a2s_info_cache_entry entry;
     struct timespec tspec;
     clock_gettime(CLOCK_MONOTONIC, &tspec);
@@ -270,13 +259,14 @@ static inline int save_and_enq_info_response(struct xdp_sock *xsk, const struct 
         free(entry.udp_data);
     }
 
-    uint16_t len = ntohs(udp_len);
+    uint16_t len = ntohs(udph->len);
 
-    entry.udp_data = malloc(len);
+    entry.udp_data = calloc(sizeof(uint8_t), len + 1);
     memcpy(entry.udp_data, udp_data, len);
     entry.len = len;
     entry.age = (tspec.tv_sec * 1e9) + tspec.tv_nsec;
     entry.misses = 0;
+    entry.csum = csum_partial(udp_data, len, 0);
     bpf_map_update_elem(a2s_cache_map_fd, &iph->saddr, &entry, BPF_ANY);
 
     xq_enq(&xsk->tx, desc, 1);
@@ -284,20 +274,23 @@ static inline int save_and_enq_info_response(struct xdp_sock *xsk, const struct 
     return 1;
 }
 
-static inline int load_and_enq_info_response(struct xdp_sock *xsk, struct xdp_desc *desc, struct iphdr *iph, uint8_t *udp_data, uint16_t *udp_len, uint8_t *pkt, uint8_t *pkt_end) {
+static inline int load_and_enq_info_response(struct xdp_sock *xsk, struct xdp_desc *desc, struct iphdr *iph, struct udphdr *udph, uint8_t *udp_data, uint8_t *pkt, uint8_t *pkt_end) {
     struct a2s_info_cache_entry entry;
     bpf_map_lookup_elem(a2s_cache_map_fd, &iph->saddr, &entry);
 
     if (likely(entry.udp_data)) {
         memcpy(udp_data, entry.udp_data, entry.len);
-        int16_t len_diff = entry.len - (ntohs(*udp_len) - sizeof(struct udphdr));
+        int16_t len_diff = entry.len - (ntohs(udph->len) - sizeof(struct udphdr));
         desc->len += len_diff;
 
-        *udp_len = htons(entry.len + sizeof(struct udphdr));
+        udph->len = htons(entry.len + sizeof(struct udphdr));
         iph->tot_len = htons(desc->len - sizeof(struct ethhdr));
 
         update_iph_checksum(iph);
-        // FIXME: Calculate UDP checksum
+        udph->check = 0;
+        __wsum csum = csum_partial((void *)udph, sizeof(struct udphdr), entry.csum);
+        udph->check = csum_tcpudp_magic(iph->saddr, iph->daddr, entry.len + sizeof(struct udphdr), IPPROTO_UDP, csum);
+
         xq_enq(&xsk->tx, desc, 1);
         xsk->outstanding_tx++;
 
@@ -339,15 +332,15 @@ static void *xsk_dispatch_a2s_info(void *arg) {
 
             udph->check = 0;
             if (check_srcds_header(udp_data, 0x49)) {
-                if (save_and_enq_info_response(xsk, &descs[c], iph, udp_data, udph->len, pkt, pkt_end)) {
+                if (save_and_enq_info_response(xsk, &descs[c], iph, udph, udp_data, pkt, pkt_end)) {
                     continue;
                 }
             } else if (likely(check_srcds_header(udp_data, 0x54))) {
-                if (load_and_enq_info_response(xsk, &descs[c], iph, udp_data, &udph->len, pkt, pkt_end)) {
+                if (load_and_enq_info_response(xsk, &descs[c], iph, udph, udp_data, pkt, pkt_end)) {
                     continue;
                 }
             }
-            
+
             umem_fill_to_kernel_ex(&xsk->umem->fq, &descs[c], 1);
         }
 

@@ -14,6 +14,7 @@
 #include "compressor_ratelimit_user.h"
 #include "srcds_util.h"
 #include "compressor_filter_user.h"
+#include "checksum.h"
 
 struct bpf_map_def {
     unsigned int type;
@@ -139,40 +140,6 @@ static __always_inline void swap_dest_src_hwaddr(void *data) {
     p[3] = dst[0];
     p[4] = dst[1];
     p[5] = dst[2];
-}
-
-static __always_inline uint16_t csum_fold_helper(uint32_t csum) {
-    uint32_t r = csum << 16 | csum >> 16;
-    csum = ~csum;
-    csum -= r;
-    return (uint16_t)(csum >> 16);
-}
-
-static __always_inline uint32_t csum_add(uint32_t addend, uint32_t csum) {
-    uint32_t res = csum;
-    res += addend;
-    return (res + (res < addend));
-}
-
-static __always_inline uint32_t csum_sub(uint32_t addend, uint32_t csum) {
-    return csum_add(csum, ~addend);
-}
-
-static __always_inline void update_iph_checksum(struct iphdr *iph) {
-    uint16_t *next_iph_u16 = (uint16_t *)iph;
-    uint32_t csum = 0;
-    iph->check = 0;
-#pragma clang loop unroll(full)
-    for (uint32_t i = 0; i < sizeof(*iph) >> 1; i++) {
-        csum += *next_iph_u16++;
-    }
-
-    iph->check = ~((csum & 0xffff) + (csum >> 16));
-}
-
-static __always_inline uint16_t csum_diff4(uint32_t from, uint32_t to, uint16_t csum) {
-    uint32_t tmp = csum_sub(from, ~((uint32_t)csum));
-    return csum_fold_helper(csum_add(to, tmp));
 }
 
 static __always_inline int forward_packet(struct xdp_md *ctx, struct forwarding_rule *rule, uint8_t tos) {

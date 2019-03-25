@@ -13,7 +13,7 @@ all: compressor compressor_filter
 compressor: libbpf $(objects)
 	clang $(LDFLAGS) -o compressor $(libbpf_objects) $(objects)
 compressor_filter: src/compressor_filter_kern.o
-	clang -Wall -Wextra -O2 -emit-llvm -c src/compressor_filter_kern.c -o src/compressor_filter_kern.bc
+	clang -D__BPF__ -Wall -Wextra -O2 -emit-llvm -c src/compressor_filter_kern.c -o src/compressor_filter_kern.bc
 	llc -march=bpf -filetype=obj src/compressor_filter_kern.bc -o src/compressor_filter_kern.o
 libbpf:
 	$(MAKE) -C libbpf/src

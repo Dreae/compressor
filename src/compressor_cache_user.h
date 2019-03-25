@@ -7,4 +7,5 @@ struct a2s_info_cache_entry {
     uint64_t misses;
     uint8_t *udp_data;
     uint16_t len;
+    uint32_t csum;
 };
