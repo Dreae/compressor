@@ -11,6 +11,7 @@
 #include "compressor_cache_seed.h"
 #include "compressor_cache_user.h"
 #include "xassert.h"
+#include "checksum.h"
 
 struct seed_arg {
     struct forwarding_rule *rule;
@@ -104,6 +105,7 @@ void *seed_cache(void *arg) {
             entry.len = data_len;
             entry.misses = 0;
             entry.age = kernel_nsec - (cache_age * 1e9);
+            entry.csum = csum_partial(entry.udp_data, entry.len, 0);
 
             bpf_map_update_elem(params->cache_map_fd, &params->rule->bind_addr, &entry, BPF_ANY);
         } else if (reply->type == REDIS_REPLY_ERROR) {

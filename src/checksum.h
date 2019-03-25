@@ -147,7 +147,7 @@ static unsigned do_csum(const unsigned char *buff, unsigned len)
  *
  * it's best to have buff aligned on a 64-bit boundary
  */
-__wsum csum_partial(const void *buff, int len, __wsum sum)
+static inline __wsum csum_partial(const void *buff, int len, __wsum sum)
 {
 	return (__wsum)add32_with_carry(do_csum((const unsigned char *)buff, len),
 						(__u32)sum);
