@@ -6,6 +6,7 @@
 #include <linux/udp.h>
 #include <linux/tcp.h>
 #include <linux/bpf_common.h>
+#include <linux/icmp.h>
 #include <stdint.h>
 #include <stdatomic.h>
 
@@ -202,6 +203,15 @@ int xdp_program(struct xdp_md *ctx) {
             return XDP_DROP;
         }
 
+        if (
+            iph->protocol != IPPROTO_UDP &&
+            iph->protocol != IPPROTO_TCP &&
+            iph->protocol != IPPROTO_IPIP &&
+            iph->protocol != IPPROTO_ICMP
+        ) {
+            return XDP_DROP;
+        }
+
         uint8_t *whitelist_entry = bpf_map_lookup_elem(&ip_whitelist_map, &iph->saddr);
         uint8_t ip_whitelisted = 0;
         if (whitelist_entry) {
@@ -253,11 +263,11 @@ int xdp_program(struct xdp_md *ctx) {
         }
 
         if (iph->protocol == IPPROTO_UDP) {
-            struct forwarding_rule *forward_rule = bpf_map_lookup_elem(&forwarding_map, &iph->daddr);
             struct udphdr *udph = data + sizeof(struct ethhdr) + sizeof(struct iphdr);
             if (udph + 1 > (struct udphdr *)data_end) {
                 return XDP_PASS;
             }
+            struct forwarding_rule *forward_rule = bpf_map_lookup_elem(&forwarding_map, &iph->daddr);
 
             uint32_t dest = (uint32_t)ntohs(udph->dest);
             if (forward_rule) {
@@ -332,11 +342,11 @@ int xdp_program(struct xdp_md *ctx) {
 
             return XDP_DROP;
         } else if (iph->protocol == IPPROTO_TCP) {
-            struct forwarding_rule *forward_rule = bpf_map_lookup_elem(&forwarding_map, &iph->daddr);
             struct tcphdr *tcph = data + sizeof(struct ethhdr) + sizeof(struct iphdr);
             if (tcph + 1 > (struct tcphdr *)data_end) {
                 return XDP_DROP;
             }
+            struct forwarding_rule *forward_rule = bpf_map_lookup_elem(&forwarding_map, &iph->daddr);
 
             if (forward_rule && ip_whitelisted) {
                 uint32_t daddr = iph->daddr;
@@ -428,6 +438,30 @@ int xdp_program(struct xdp_md *ctx) {
 
             update_iph_checksum(inner_ip);
             return XDP_TX;
+        } else if (iph->protocol == IPPROTO_ICMP) {
+            struct icmphdr *icmph = data + sizeof(struct ethhdr) + sizeof(struct iphdr);
+            if (icmph + 1 > (struct icmphdr *)data_end) {
+                return XDP_ABORTED;
+            }
+
+            if (icmph->type == ICMP_ECHO) {
+                uint32_t saddr = iph->saddr;
+                uint32_t daddr = iph->daddr;
+                iph->saddr = daddr;
+                iph->daddr = saddr;
+
+                uint8_t old_ttl = iph->ttl;
+                iph->ttl = 64;
+                iph->check = csum_diff4(old_ttl, 64, iph->check);
+
+                icmph->type = ICMP_ECHOREPLY;
+                icmph->checksum = csum_diff4(ICMP_ECHO, ICMP_ECHOREPLY, icmph->checksum);
+                swap_dest_src_hwaddr(data);
+
+                return XDP_TX;
+            }
+
+            return XDP_DROP;
         }
 
         return XDP_DROP;
