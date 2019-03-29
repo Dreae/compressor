@@ -93,16 +93,10 @@ struct compressor_maps *load_xdp_prog(struct service_def **services, struct forw
     int ip_whitelist_map_fd = map_fd[9];
 
     if(!map_fd[10]) {
-        fprintf(stderr, "Error finding known host map in XDP program\n");
-        return 0;
-    }
-    int known_hosts_map_fd = map_fd[10];
-
-    if(!map_fd[11]) {
         fprintf(stderr, "Error findind prefix whitelist in XDP program\n");
         return 0;
     }
-    int prefix_whitelist_fd = map_fd[11];
+    int prefix_whitelist_fd = map_fd[10];
 
     struct service_def *service;
     int idx = 0;
@@ -190,13 +184,6 @@ struct compressor_maps *load_xdp_prog(struct service_def **services, struct forw
         err = bpf_map_update_elem(forwarding_rules_fd, &rule->bind_addr, rule, BPF_NOEXIST);
         if (err) {
             fprintf(stderr, "Store forwarding IP map failed: (err:%d)\n", err);
-            perror("bpf_map_update_elem");
-            return 0;
-        }
-
-        err = bpf_map_update_elem(known_hosts_map_fd, &rule->to_addr, &enable, BPF_ANY);
-        if (err) {
-            fprintf(stderr, "Store known host IP map failed: (err:%d)\n", err);
             perror("bpf_map_update_elem");
             return 0;
         }
