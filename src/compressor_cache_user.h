@@ -5,6 +5,7 @@ void load_skb_program(const char *ifname, int ifindex, int xsk_map_fd, int a2s_i
 struct a2s_info_cache_entry {
     uint64_t age;
     uint64_t misses;
+    uint64_t hits;
     uint8_t *udp_data;
     uint16_t len;
     uint32_t csum;

@@ -204,10 +204,12 @@ int xdp_program(struct xdp_md *ctx) {
         }
 
         if (
-            iph->protocol != IPPROTO_UDP &&
-            iph->protocol != IPPROTO_TCP &&
-            iph->protocol != IPPROTO_IPIP &&
-            iph->protocol != IPPROTO_ICMP
+            unlikely(
+                iph->protocol != IPPROTO_UDP &&
+                iph->protocol != IPPROTO_TCP &&
+                iph->protocol != IPPROTO_IPIP &&
+                iph->protocol != IPPROTO_ICMP
+            )
         ) {
             return XDP_DROP;
         }
@@ -242,8 +244,8 @@ int xdp_program(struct xdp_md *ctx) {
                     return XDP_ABORTED;
                 }
 
-                *new_ips = *new_ips + 1;
-                if (*new_ips > cfg->new_conn_limit) {
+                uint_fast64_t new_ip_count = __sync_add_and_fetch(new_ips, 1);
+                if (new_ip_count > cfg->new_conn_limit) {
                     return XDP_DROP;
                 }
 
@@ -254,9 +256,9 @@ int xdp_program(struct xdp_md *ctx) {
                 bpf_map_update_elem(&rate_limit_map, &iph->saddr, &new_entry, BPF_ANY);
             } else {
                 last_seen->last_seen = now;
-                last_seen->hits++;
+                uint_fast64_t hits = __sync_add_and_fetch(&last_seen->hits, 1);
 
-                if (last_seen->hits > cfg->rate_limit) {
+                if (hits > cfg->rate_limit) {
                     return XDP_DROP;
                 }
             }
@@ -293,6 +295,8 @@ int xdp_program(struct xdp_md *ctx) {
                         struct a2s_info_cache_entry *entry = bpf_map_lookup_elem(&a2s_info_cache_map, &iph->daddr);
                         if (entry) {
                             if ((entry->misses > forward_rule->a2s_info_cache || forward_rule->a2s_info_cache == 1) && bpf_ktime_get_ns() - entry->age < forward_rule->cache_time) {
+                                __sync_fetch_and_add(&entry->hits, 1);
+
                                 // Set up address so all userspace needs to do is fill out the
                                 // data and retransmit
                                 uint32_t saddr = iph->saddr;
@@ -304,13 +308,12 @@ int xdp_program(struct xdp_md *ctx) {
 
                                 // We don't need to update checksums, since userspace will need to
                                 // either way
-
                                 swap_dest_src_hwaddr(data);
 
                                 return bpf_redirect_map(&xsk_map, 0, 0);
                             }
 
-                            entry->misses++;
+                            __sync_fetch_and_add(&entry->misses, 1);
                         }
                     }
                 }
@@ -325,7 +328,7 @@ int xdp_program(struct xdp_md *ctx) {
 
                 uint32_t daddr = iph->daddr;
                 iph->daddr = forward_rule->inner_addr;
-                update_iph_checksum(iph);
+                iph->check = csum_diff4(daddr, iph->daddr, iph->check);
                 udph->check = csum_diff4(daddr, iph->daddr, udph->check);
 
                 return forward_packet(ctx, forward_rule, 0x50);
@@ -351,7 +354,7 @@ int xdp_program(struct xdp_md *ctx) {
             if (forward_rule && ip_whitelisted) {
                 uint32_t daddr = iph->daddr;
                 iph->daddr = forward_rule->inner_addr;
-                update_iph_checksum(iph);
+                iph->check = csum_diff4(daddr, iph->daddr, iph->check);
                 tcph->check = csum_diff4(daddr, iph->daddr, tcph->check);
 
                 return forward_packet(ctx, forward_rule, 0x00);
@@ -402,6 +405,7 @@ int xdp_program(struct xdp_md *ctx) {
 
             uint32_t old_saddr = inner_ip->saddr;
             inner_ip->saddr = tunnel_rule->bind_addr;
+            inner_ip->check = csum_diff4(old_saddr, inner_ip->saddr, inner_ip->check);
 
             if (inner_ip->protocol == IPPROTO_UDP) {
                 struct udphdr *udph = data + sizeof(struct ethhdr) + sizeof(struct iphdr);
@@ -409,14 +413,12 @@ int xdp_program(struct xdp_md *ctx) {
                     return XDP_DROP;
                 }
 
+                udph->check = csum_diff4(old_saddr, inner_ip->saddr, udph->check);
+
                 if (ntohs(udph->source) == tunnel_rule->to_port) {
+                    uint16_t old_tos = *((uint16_t *)inner_ip);
                     inner_ip->tos = 0x50;
-                    uint8_t *udpdata = data + sizeof(struct ethhdr) + sizeof(struct iphdr) + sizeof(struct udphdr);
-                    if (!(udpdata + 5 > (uint8_t *)data_end)) {
-                        if (check_srcds_header(udpdata, 0x49) && tunnel_rule->a2s_info_cache) {
-                            return bpf_redirect_map(&xsk_map, 0, 0);
-                        }
-                    }
+                    inner_ip->check = csum_diff4(old_tos, *((uint16_t *)inner_ip), inner_ip->check);
 
                     if (ntohs(udph->source) != tunnel_rule->bind_port) {
                         uint32_t source = udph->source;
@@ -424,9 +426,15 @@ int xdp_program(struct xdp_md *ctx) {
                         udph->source = dest;
                         udph->check = csum_diff4(source, dest, udph->check);
                     }
+
+                    uint8_t *udpdata = data + sizeof(struct ethhdr) + sizeof(struct iphdr) + sizeof(struct udphdr);
+                    if (!(udpdata + 5 > (uint8_t *)data_end)) {
+                        if (check_srcds_header(udpdata, 0x49) && tunnel_rule->a2s_info_cache) {
+                            return bpf_redirect_map(&xsk_map, 0, 0);
+                        }
+                    }
                 }
 
-                udph->check = csum_diff4(old_saddr, inner_ip->saddr, udph->check);
             } else if (inner_ip->protocol == IPPROTO_TCP) {
                 struct tcphdr *tcph = data + sizeof(struct ethhdr) + sizeof(struct iphdr);
                 if (tcph + 1 > (struct tcphdr *)data_end) {
@@ -436,7 +444,6 @@ int xdp_program(struct xdp_md *ctx) {
                 tcph->check = csum_diff4(old_saddr, inner_ip->saddr, tcph->check);
             }
 
-            update_iph_checksum(inner_ip);
             return XDP_TX;
         } else if (iph->protocol == IPPROTO_ICMP) {
             struct icmphdr *icmph = data + sizeof(struct ethhdr) + sizeof(struct iphdr);

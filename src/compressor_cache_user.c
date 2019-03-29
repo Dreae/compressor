@@ -259,13 +259,17 @@ static inline int save_and_enq_info_response(struct xdp_sock *xsk, const struct 
         free(entry.udp_data);
     }
 
+    if (entry.hits) {
+        entry.misses = 0;
+        entry.hits = 0;
+    }
+
     uint16_t len = ntohs(udph->len);
 
     entry.udp_data = calloc(sizeof(uint8_t), len + 1);
     memcpy(entry.udp_data, udp_data, len);
     entry.len = len;
     entry.age = (tspec.tv_sec * 1e9) + tspec.tv_nsec;
-    entry.misses = 0;
     entry.csum = csum_partial(udp_data, len, 0);
     bpf_map_update_elem(a2s_cache_map_fd, &iph->saddr, &entry, BPF_ANY);
 
