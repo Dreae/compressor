@@ -77,6 +77,9 @@ void *seed_cache(void *arg) {
             }
 
             uint64_t cache_seconds = params->rule->cache_time / 1e9;
+            struct timespec tspec;
+            clock_gettime(CLOCK_MONOTONIC, &tspec);
+            uint64_t kernel_nsec = (tspec.tv_sec * 1e9) + tspec.tv_nsec;
 
             void *data = (void *)reply->str;
             uint64_t *timestamp = (uint64_t *)data;
@@ -84,26 +87,29 @@ void *seed_cache(void *arg) {
 
             uint64_t cache_age = now - *timestamp;
 
+            struct a2s_info_cache_entry entry = { 0 };
+            bpf_map_lookup_elem(params->cache_map_fd, &params->rule->bind_addr, &entry);
+            if (entry.hits && kernel_nsec - entry.age > params->rule->cache_time) {
+                entry.hits = 0;
+                entry.misses = 0;
+            }
+
             if (cache_age > cache_seconds) {
+                bpf_map_update_elem(params->cache_map_fd, &params->rule->bind_addr, &entry, BPF_ANY);
                 freeReplyObject(reply);
                 continue;
             }
 
-            struct a2s_info_cache_entry entry = { 0 };
-            bpf_map_lookup_elem(params->cache_map_fd, &params->rule->bind_addr, &entry);
             if (entry.udp_data) {
                 free(entry.udp_data);
             }
 
-            struct timespec tspec;
-            clock_gettime(CLOCK_MONOTONIC, &tspec);
-            uint64_t kernel_nsec = (tspec.tv_sec * 1e9) + tspec.tv_nsec;
 
             uint64_t data_len = reply->len - sizeof(uint64_t);
             entry.udp_data = malloc(data_len);
             memcpy(entry.udp_data, data + sizeof(uint64_t), data_len);
+
             entry.len = data_len;
-            entry.misses = 0;
             entry.age = kernel_nsec - (cache_age * 1e9);
             entry.csum = csum_partial(entry.udp_data, entry.len, 0);
 
