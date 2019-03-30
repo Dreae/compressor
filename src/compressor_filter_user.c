@@ -8,6 +8,7 @@
 #include <arpa/inet.h>
 #include <string.h>
 #include <errno.h>
+#include <sys/sysinfo.h>
 
 #include "compressor_filter_user.h"
 #include "compressor_cache_user.h"
@@ -21,6 +22,29 @@ static void cleanup_interface(void) {
 static void int_exit(int sig) {
     cleanup_interface();
     exit(0);
+}
+
+static void init_rate_limit_maps(int rate_limit_map_fd) {
+    int num_cpus = get_nprocs_conf();
+    if (num_cpus > MAX_CPUS) {
+        num_cpus = MAX_CPUS;
+    }
+    uint32_t per_cpu_lru_size = LRU_SIZE / num_cpus;
+
+    for (uint32_t cpu_id = 0; cpu_id < num_cpus; cpu_id++) {
+        uint32_t cpu_ratelimit_lru = bpf_create_map(BPF_MAP_TYPE_LRU_HASH, sizeof(uint32_t), sizeof(struct ip_addr_history), per_cpu_lru_size, 0);
+        if (cpu_ratelimit_lru == -1) {
+            fprintf(stderr, "Error creating LRU hash for ratelimiting\n");
+            perror("bpf_create_mape()");
+            exit(1);
+        }
+
+        if (bpf_map_update_elem(rate_limit_map_fd, &cpu_id, &cpu_ratelimit_lru, BPF_ANY)) {
+            fprintf(stderr, "Error storing per-CPU LRU\n");
+            perror("bpf_map_update_elem()");
+            exit(1);
+        }
+    }
 }
 
 struct compressor_maps *load_xdp_prog(struct service_def **services, struct forwarding_rule **forwarding, struct in_addr **ip_whitelist, struct whitelisted_prefix **whitelisted_prefixes, struct config *cfg) {
@@ -74,23 +98,17 @@ struct compressor_maps *load_xdp_prog(struct service_def **services, struct forw
     }
     int a2s_cache_map_fd = map_fd[6];
 
-    if(!map_fd[7]) {
+    if(!map_fd[8]) {
         fprintf(stderr, "Error finding rate limit map in XDP program\n");
         return 0;
     }
-    int rate_limit_map_fd = map_fd[7];
+    int rate_limit_map_fd = map_fd[8];
 
-    if(!map_fd[8]) {
+    if(!map_fd[9]) {
         fprintf(stderr, "Error finding new connection map in XDP program\n");
         return 0;
     }
-    int new_conn_map_fd = map_fd[8];
-
-    if(!map_fd[9]) {
-        fprintf(stderr, "Error finding IP whitelist map in XDP program\n");
-        return 0;
-    }
-    int ip_whitelist_map_fd = map_fd[9];
+    int new_conn_map_fd = map_fd[9];
 
     if(!map_fd[10]) {
         fprintf(stderr, "Error findind prefix whitelist in XDP program\n");
@@ -127,7 +145,12 @@ struct compressor_maps *load_xdp_prog(struct service_def **services, struct forw
     struct in_addr *ip;
     idx = 0;
     while((ip = ip_whitelist[idx]) != NULL) {
-        err = bpf_map_update_elem(ip_whitelist_map_fd, &ip->s_addr, &enable, BPF_ANY);
+        struct lpm_trie_key key = {
+            .prefixlen = 32,
+            .data = ip->s_addr
+        };
+        uint64_t value = ((uint64_t)0xffffffff << 32) | ip->s_addr;
+        err = bpf_map_update_elem(prefix_whitelist_fd, &key, &value, BPF_ANY);
         if (err) {
             fprintf(stderr, "Store whitelist IP map failed: (err:%d)\n", err);
             perror("bpf_map_update_elem");
@@ -153,6 +176,8 @@ struct compressor_maps *load_xdp_prog(struct service_def **services, struct forw
             return 0;
         }
     }
+
+    init_rate_limit_maps(rate_limit_map_fd);
 
     struct forwarding_rule *rule;
     idx = 0;

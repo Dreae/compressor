@@ -14,7 +14,6 @@
 int ifindex;
 #include "compressor_filter_user.h"
 #include "compressor_cache_user.h"
-#include "compressor_ratelimit_user.h"
 #include "compressor_cache_seed.h"
 #include "compressor_maxmind.h"
 
@@ -76,8 +75,8 @@ int main(int argc, char **argv) {
 
         long long rate_limit = 0;
         if (config_lookup_int64(&config, "ip_rate_limit", &rate_limit) == CONFIG_FALSE) {
-            rate_limit = 24000;
-            fprintf(stderr, "Warning: no rate limit set; defaulting to 24000\n");
+            rate_limit = 12000;
+            fprintf(stderr, "Warning: no rate limit set; defaulting to 12000\n");
         }
         cfg.rate_limit = rate_limit;
         cfg.new_conn_limit = new_conn_limit;
@@ -175,7 +174,6 @@ int main(int argc, char **argv) {
         if (redis_addr && redis_port) {
             start_cache_seeding(maps->a2s_cache_map_fd, forwarding_rules, redis_addr, redis_port);
         }
-        start_rlimit_mon(maps->rate_limit_map_fd, maps->new_conn_map_fd);
 
         free_array((void **)service_defs);
         free_array((void **)forwarding_rules);

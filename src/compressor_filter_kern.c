@@ -12,7 +12,6 @@
 
 #include "config.h"
 #include "compressor_cache_user.h"
-#include "compressor_ratelimit_user.h"
 #include "srcds_util.h"
 #include "compressor_filter_user.h"
 #include "checksum.h"
@@ -86,27 +85,27 @@ struct bpf_map_def SEC("maps") a2s_info_cache_map = {
 };
 
 // Map 7
-struct bpf_map_def SEC("maps") rate_limit_map = {
-    .type = BPF_MAP_TYPE_HASH,
+struct bpf_map_def SEC("maps") rate_limit_inner_map = {
+    .type = BPF_MAP_TYPE_LRU_HASH,
     .key_size = sizeof(uint32_t),
     .value_size = sizeof(struct ip_addr_history),
-    .max_entries = 1048560
+    .max_entries = LRU_SIZE
 };
 
 // Map 8
-struct bpf_map_def SEC("maps") new_conn_map = {
-    .type = BPF_MAP_TYPE_ARRAY,
+struct bpf_map_def SEC("maps") rate_limit_map = {
+    .type = BPF_MAP_TYPE_ARRAY_OF_MAPS,
     .key_size = sizeof(uint32_t),
-    .value_size = sizeof(uint_fast64_t),
-    .max_entries = 1
+    .max_entries = MAX_CPUS,
+    .inner_map_idx = 7
 };
 
 // Map 9
-struct bpf_map_def SEC("maps") ip_whitelist_map = {
-    .type = BPF_MAP_TYPE_HASH,
+struct bpf_map_def SEC("maps") new_conn_map = {
+    .type = BPF_MAP_TYPE_PERCPU_ARRAY,
     .key_size = sizeof(uint32_t),
-    .value_size = sizeof(uint8_t),
-    .max_entries = 4096
+    .value_size = sizeof(struct compressor_new_ips),
+    .max_entries = 1
 };
 
 // Map 10
@@ -117,6 +116,20 @@ struct bpf_map_def SEC("maps") ip_prefix_whitelist_map = {
     .max_entries = 16384,
     .map_flags = BPF_F_NO_PREALLOC
 };
+
+
+static __always_inline void copy_and_swap_hwaddr(struct ethhdr *new_hdr, struct ethhdr *old_hdr) {
+    uint16_t *new_p = (uint16_t *)new_hdr;
+    uint16_t *old_p = (uint16_t *)old_hdr;
+
+    new_p[0] = old_p[3];
+    new_p[1] = old_p[4];
+    new_p[2] = old_p[5];
+    new_p[3] = old_p[0];
+    new_p[4] = old_p[1];
+    new_p[5] = old_p[2];
+    new_hdr->h_proto = old_hdr->h_proto;
+}
 
 static __always_inline void swap_dest_src_hwaddr(void *data) {
     uint16_t *p = data;
@@ -152,7 +165,7 @@ static __always_inline int forward_packet(struct xdp_md *ctx, struct forwarding_
         // Ethernet header and IP header are the same size,
         // move the Ethernet header to the front of the newly
         // created space and add a new IP header in its place
-        __builtin_memcpy(new_eth, old_eth, sizeof(struct ethhdr));
+        copy_and_swap_hwaddr(new_eth, old_eth);
         new_iph->version = 4;
         new_iph->ihl = sizeof(struct iphdr) >> 2;
         new_iph->frag_off = 0;
@@ -164,8 +177,6 @@ static __always_inline int forward_packet(struct xdp_md *ctx, struct forwarding_
         new_iph->daddr = rule->to_addr;
         new_iph->saddr = rule->bind_addr;
         update_iph_checksum(new_iph);
-
-        swap_dest_src_hwaddr(data);
 
         return XDP_TX;
 }
@@ -216,10 +227,8 @@ int xdp_program(struct xdp_md *ctx) {
                 return XDP_DROP;
             }
 
-            // Save a copy of the eth header since it will
-            // get dropped when we move the XDP data
-            struct ethhdr old_eth;
-            __builtin_memcpy(&old_eth, eth, sizeof(struct ethhdr));
+            struct ethhdr *new_eth = data + sizeof(struct iphdr);
+            copy_and_swap_hwaddr(new_eth, eth);
 
             // Remove outer IP frame
             if (bpf_xdp_adjust_head(ctx, (int)sizeof(struct iphdr))) {
@@ -227,14 +236,11 @@ int xdp_program(struct xdp_md *ctx) {
             }
             data = (void *)(long)ctx->data;
             data_end = (void *)(long)ctx->data_end;
-            struct ethhdr *new_eth = data;
             inner_ip = data + sizeof(struct ethhdr);
 
-            if (new_eth + 1 > (struct ethhdr *)data_end || inner_ip + 1 > (struct iphdr *)data_end) {
+            if (inner_ip + 1 > (struct iphdr *)data_end) {
                 return XDP_DROP;
             }
-            __builtin_memcpy(new_eth, &old_eth, sizeof(struct ethhdr));
-            swap_dest_src_hwaddr(data);
 
             uint32_t old_saddr = inner_ip->saddr;
             inner_ip->saddr = tunnel_rule->bind_addr;
@@ -292,38 +298,47 @@ int xdp_program(struct xdp_md *ctx) {
                 }
             }
 
-            if (!ip_whitelisted) {
-                uint8_t *whitelist_entry = bpf_map_lookup_elem(&ip_whitelist_map, &iph->saddr);
-                if (whitelist_entry) {
-                    ip_whitelisted = *whitelist_entry;
-                }
+            uint32_t cpu_id = bpf_get_smp_processor_id();
+            void *lru_map = bpf_map_lookup_elem(&rate_limit_map, &cpu_id);
+            if (!lru_map) {
+                // How?
+                return XDP_ABORTED;
             }
 
-            struct ip_addr_history *last_seen = bpf_map_lookup_elem(&rate_limit_map, &iph->saddr);
+            struct ip_addr_history *last_seen = bpf_map_lookup_elem(lru_map, &iph->saddr);
             uint64_t now = bpf_ktime_get_ns();
             if (!last_seen) {
 
                 uint32_t key = 0;
-                uint_fast64_t *new_ips = bpf_map_lookup_elem(&new_conn_map, &key);
-                if (!new_ips) {
+                struct compressor_new_ips *new_ip_stats = bpf_map_lookup_elem(&new_conn_map, &key);
+                if (!new_ip_stats) {
                     return XDP_ABORTED;
                 }
 
-                uint_fast64_t new_ip_count = __sync_add_and_fetch(new_ips, 1);
-                if (new_ip_count > cfg->new_conn_limit) {
-                    return XDP_DROP;
+                if (now - new_ip_stats->timestamp > 1e9) {
+                    new_ip_stats->new_ips = 1;
+                    new_ip_stats->timestamp = now;
+                } else {
+                    new_ip_stats->new_ips += 1;
+                    if (new_ip_stats->new_ips > cfg->new_conn_limit) {
+                        return XDP_DROP;
+                    }
                 }
 
                 struct ip_addr_history new_entry = {
-                    .last_seen = now,
+                    .timestamp = now,
                     .hits = 1
                 };
-                bpf_map_update_elem(&rate_limit_map, &iph->saddr, &new_entry, BPF_ANY);
+                bpf_map_update_elem(lru_map, &iph->saddr, &new_entry, BPF_ANY);
             } else {
-                last_seen->last_seen = now;
-                uint_fast64_t hits = __sync_add_and_fetch(&last_seen->hits, 1);
+                if (now - last_seen->timestamp > 6e10) {
+                    last_seen->hits = 1;
+                    last_seen->timestamp = now;
+                } else {
+                    last_seen->hits += 1;
+                }
 
-                if (hits > cfg->rate_limit) {
+                if (last_seen->hits > cfg->rate_limit) {
                     return XDP_DROP;
                 }
             }

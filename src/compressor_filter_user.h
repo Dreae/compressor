@@ -3,6 +3,9 @@
 #include "compressor.h"
 #include "config.h"
 
+#define MAX_CPUS 128
+#define LRU_SIZE 65535
+
 struct compressor_maps {
     int xsk_map_fd;
     int rate_limit_map_fd;
@@ -13,6 +16,16 @@ struct compressor_maps {
 struct lpm_trie_key {
     uint32_t prefixlen;
     uint32_t data;
+};
+
+struct compressor_new_ips {
+    uint_fast64_t new_ips;
+    uint_fast64_t timestamp;
+};
+
+struct ip_addr_history {
+    uint_fast64_t timestamp;
+    uint_fast64_t hits;
 };
 
 extern int ifindex;

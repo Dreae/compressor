@@ -25,3 +25,4 @@ static int (*bpf_xdp_adjust_head)(void *ctx, int offset) = (void *) BPF_FUNC_xdp
 static int64_t (*bpf_csum_diff)(__be32 *from, uint32_t from_size, __be32 *to, uint32_t to_size, __wsum seed) = (void *) BPF_FUNC_csum_diff;
 static uint64_t (*bpf_ktime_get_ns)(void) = (void *) BPF_FUNC_ktime_get_ns;
 static int (*bpf_redirect_map)(void *map, int key, int flags) = (void *) BPF_FUNC_redirect_map;
+static uint32_t (*bpf_get_smp_processor_id)(void) = (void *) BPF_FUNC_get_smp_processor_id;

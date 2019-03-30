@@ -37,7 +37,7 @@ void *seed_cache(void *arg) {
     }
 
     for (;;) {
-        sleep(4);
+        sleep(8);
 
         struct a2s_info_cache_entry entry = { 0 };
         bpf_map_lookup_elem(params->cache_map_fd, &params->rule->bind_addr, &entry);
@@ -47,16 +47,13 @@ void *seed_cache(void *arg) {
             uint64_t kernel_nsec = (tspec.tv_sec * 1e9) + tspec.tv_nsec;
 
             // If we have a recent response, update redis
-            if (kernel_nsec - entry.age < 4e9) {
-                uint64_t now = time(NULL);
+            if (kernel_nsec - entry.age < 8e9) {
                 uint64_t expires = (params->rule->cache_time - (kernel_nsec - entry.age)) / 1e9;
-                uint64_t age = now - ((kernel_nsec - entry.age) / 1e9);
 
-                uint8_t *buffer = calloc(entry.len + sizeof(uint64_t), sizeof(uint8_t));
-                memcpy(buffer, &age, sizeof(uint64_t));
-                memcpy(buffer + sizeof(uint64_t), entry.udp_data, entry.len);
+                uint8_t *buffer = calloc(entry.len + 1, sizeof(uint8_t));
+                memcpy(buffer, entry.udp_data, entry.len);
 
-                redisReply *reply = redisCommand(redis, "SETEX %b %d %b", &params->rule->bind_addr, sizeof(uint32_t), expires, buffer, entry.len + sizeof(uint64_t));
+                redisReply *reply = redisCommand(redis, "SETEX %b %d %b", &params->rule->bind_addr, sizeof(uint32_t), expires, buffer, entry.len);
                 if (reply->type == REDIS_REPLY_ERROR) {
                     char err_buff[255];
                     strncpy(err_buff, reply->str, (reply->len > 254) ? 254 : reply->len);
@@ -76,41 +73,37 @@ void *seed_cache(void *arg) {
                 continue;
             }
 
-            uint64_t cache_seconds = params->rule->cache_time / 1e9;
+            redisReply *ttlReply = redisCommand(redis, "TTL %b", &params->rule->bind_addr, sizeof(uint32_t));
+            if (ttlReply->type != REDIS_REPLY_INTEGER) {
+                fprintf(stderr, "Didn't get integer reply for TTL request");
+                freeReplyObject(reply);
+                freeReplyObject(ttlReply);
+                continue;
+            }
+
+            long long ttl = ttlReply->integer;
+            freeReplyObject(ttlReply);
+
             struct timespec tspec;
             clock_gettime(CLOCK_MONOTONIC, &tspec);
             uint64_t kernel_nsec = (tspec.tv_sec * 1e9) + tspec.tv_nsec;
 
-            void *data = (void *)reply->str;
-            uint64_t *timestamp = (uint64_t *)data;
-            time_t now = time(NULL);
-
-            uint64_t cache_age = now - *timestamp;
-
-            struct a2s_info_cache_entry entry = { 0 };
-            bpf_map_lookup_elem(params->cache_map_fd, &params->rule->bind_addr, &entry);
             if (entry.hits && kernel_nsec - entry.age > params->rule->cache_time) {
                 entry.hits = 0;
                 entry.misses = 0;
-            }
-
-            if (cache_age > cache_seconds) {
-                bpf_map_update_elem(params->cache_map_fd, &params->rule->bind_addr, &entry, BPF_ANY);
-                freeReplyObject(reply);
-                continue;
             }
 
             if (entry.udp_data) {
                 free(entry.udp_data);
             }
 
-
-            uint64_t data_len = reply->len - sizeof(uint64_t);
+            void *data = (void *)reply->str;
+            uint64_t data_len = reply->len;
             entry.udp_data = malloc(data_len);
-            memcpy(entry.udp_data, data + sizeof(uint64_t), data_len);
+            memcpy(entry.udp_data, data, data_len);
 
             entry.len = data_len;
-            entry.age = kernel_nsec - (cache_age * 1e9);
+            entry.age = kernel_nsec - (params->rule->cache_time - (ttl * 1e9));
             entry.csum = csum_partial(entry.udp_data, entry.len, 0);
 
             bpf_map_update_elem(params->cache_map_fd, &params->rule->bind_addr, &entry, BPF_ANY);
