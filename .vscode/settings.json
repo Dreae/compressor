@@ -10,5 +10,8 @@
         "net.h": "c",
         "socket.h": "c",
         "wordsize.h": "c"
-    }
+    },
+    "licenser.author": "Dreae",
+    "licenser.license": "GPLv3",
+    "licenser.projectName": "compressor"
 }
