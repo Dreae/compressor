@@ -21,7 +21,7 @@
 #include "config.h"
 
 #define MAX_CPUS 128
-#define LRU_SIZE 65535
+#define LRU_SIZE 16384
 
 struct compressor_maps {
     int xsk_map_fd;

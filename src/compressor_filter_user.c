@@ -48,10 +48,9 @@ static void init_rate_limit_maps(int rate_limit_map_fd) {
     if (num_cpus > MAX_CPUS) {
         num_cpus = MAX_CPUS;
     }
-    uint32_t per_cpu_lru_size = LRU_SIZE / num_cpus;
 
     for (uint32_t cpu_id = 0; cpu_id < num_cpus; cpu_id++) {
-        uint32_t cpu_ratelimit_lru = bpf_create_map(BPF_MAP_TYPE_LRU_HASH, sizeof(uint32_t), sizeof(struct ip_addr_history), per_cpu_lru_size, 0);
+        uint32_t cpu_ratelimit_lru = bpf_create_map(BPF_MAP_TYPE_LRU_HASH, sizeof(uint32_t), sizeof(struct ip_addr_history), LRU_SIZE, 0);
         if (cpu_ratelimit_lru == -1) {
             fprintf(stderr, "Error creating LRU hash for ratelimiting\n");
             perror("bpf_create_mape()");
