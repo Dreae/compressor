@@ -9,7 +9,11 @@
         "time.h": "c",
         "net.h": "c",
         "socket.h": "c",
-        "wordsize.h": "c"
+        "wordsize.h": "c",
+        "bpf_load.h": "c",
+        "config.h": "c",
+        "sysinfo.h": "c",
+        "libbpf.h": "c"
     },
     "licenser.author": "Dreae",
     "licenser.license": "GPLv3",

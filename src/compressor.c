@@ -17,6 +17,7 @@
  * along with compressor.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <linux/if_link.h>
 #include <net/if.h>
 #include <sys/resource.h>
 #include <libconfig.h>
@@ -26,6 +27,7 @@
 #include <unistd.h>
 #include <string.h>
 #include <arpa/inet.h>
+#include <libbpf.h>
 
 #include "compressor.h"
 #include "config.h"
@@ -84,6 +86,14 @@ int main(int argc, char **argv) {
             fprintf(stderr, "Error: No interface defined in configuration file\n");
             return 1;
         }
+
+        ifindex = if_nametoindex(interface);
+        if (!ifindex) {
+            perror("Error getting interface");
+            return 1;
+        }
+        bpf_set_link_xdp_fd(ifindex, -1, XDP_FLAGS_SKB_MODE);
+
 
         struct config cfg = { 0 };
         long long new_conn_limit = 0;
@@ -167,12 +177,6 @@ int main(int argc, char **argv) {
                 fprintf(stderr, "Error reading redis config, no port defined\n");
                 return 1;
             }
-        }
-
-        ifindex = if_nametoindex(interface);
-        if (!ifindex) {
-            perror("Error getting interface");
-            return 1;
         }
 
         uint16_t hwaddr[3];

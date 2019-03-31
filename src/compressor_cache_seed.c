@@ -66,7 +66,7 @@ void *seed_cache(void *arg) {
             uint64_t kernel_nsec = (tspec.tv_sec * 1e9) + tspec.tv_nsec;
 
             // If we have a recent response, update redis
-            if (kernel_nsec - entry.age < 8e9) {
+            if (kernel_nsec - entry.age < 12e9) {
                 uint64_t expires = (params->rule->cache_time - (kernel_nsec - entry.age)) / 1e9;
 
                 uint8_t *buffer = calloc(entry.len + 1, sizeof(uint8_t));
