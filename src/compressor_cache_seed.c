@@ -99,9 +99,13 @@ void *seed_cache(void *arg) {
                 freeReplyObject(ttlReply);
                 continue;
             }
-
             long long ttl = ttlReply->integer;
             freeReplyObject(ttlReply);
+
+            get_cache_lock();
+            // Old entry was acquired outside of the lock, and may contain invalid pointers to
+            // free'd memory
+            bpf_map_lookup_elem(params->cache_map_fd, &params->rule->bind_addr, &entry);
 
             struct timespec tspec;
             clock_gettime(CLOCK_MONOTONIC, &tspec);
@@ -126,6 +130,7 @@ void *seed_cache(void *arg) {
             entry.csum = csum_partial(entry.udp_data, entry.len, 0);
 
             bpf_map_update_elem(params->cache_map_fd, &params->rule->bind_addr, &entry, BPF_ANY);
+            release_cache_lock();
         } else if (reply->type == REDIS_REPLY_ERROR) {
             char err_buff[255];
             strncpy(err_buff, reply->str, (reply->len > 254) ? 254 : reply->len);

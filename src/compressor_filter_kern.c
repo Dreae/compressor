@@ -92,7 +92,7 @@ struct bpf_map_def SEC("maps") xsk_map = {
     .type = BPF_MAP_TYPE_XSKMAP,
     .key_size = sizeof(uint32_t),
     .value_size = sizeof(uint32_t),
-    .max_entries = 4
+    .max_entries = MAX_CPUS
 };
 
 // Map 6
@@ -288,7 +288,7 @@ int xdp_program(struct xdp_md *ctx) {
                     uint8_t *udpdata = data + sizeof(struct ethhdr) + sizeof(struct iphdr) + sizeof(struct udphdr);
                     if (!(udpdata + 5 > (uint8_t *)data_end)) {
                         if (check_srcds_header(udpdata, 0x49) && tunnel_rule->a2s_info_cache) {
-                            return bpf_redirect_map(&xsk_map, 0, 0);
+                            return bpf_redirect_map(&xsk_map, bpf_get_smp_processor_id(), 0);
                         }
                     }
                 }
@@ -408,7 +408,7 @@ int xdp_program(struct xdp_md *ctx) {
                                     // either way
                                     swap_dest_src_hwaddr(data);
 
-                                    return bpf_redirect_map(&xsk_map, 0, 0);
+                                    return bpf_redirect_map(&xsk_map, bpf_get_smp_processor_id(), 0);
                                 }
 
                                 __sync_fetch_and_add(&entry->misses, 1);

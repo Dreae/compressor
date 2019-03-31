@@ -42,10 +42,12 @@
 #include <linux/bpf_common.h>
 #include <poll.h>
 #include <time.h>
+#include <sys/sysinfo.h>
 
 #include "bpf_load.h"
 #include "srcds_util.h"
 #include "compressor_cache_user.h"
+#include "compressor_filter_user.h"
 #include "xassert.h"
 #include "checksum.h"
 
@@ -106,6 +108,16 @@ struct xdp_sock {
 };
 
 static int a2s_cache_map_fd;
+
+static pthread_mutex_t a2s_cache_lock;
+
+__always_inline void get_cache_lock(void) {
+    pthread_mutex_lock(&a2s_cache_lock);
+}
+
+__always_inline void release_cache_lock(void) {
+    pthread_mutex_unlock(&a2s_cache_lock);
+}
 
 static inline int umem_nb_free(struct xdp_umem_uqueue *q, uint32_t nb) {
     uint32_t free_entries = q->cached_cons - q->cached_prod;
@@ -273,6 +285,7 @@ static inline int save_and_enq_info_response(struct xdp_sock *xsk, const struct 
     struct timespec tspec;
     clock_gettime(CLOCK_MONOTONIC, &tspec);
 
+    get_cache_lock();
     bpf_map_lookup_elem(a2s_cache_map_fd, &iph->saddr, &entry);
     if (entry.udp_data) {
         free(entry.udp_data);
@@ -283,7 +296,7 @@ static inline int save_and_enq_info_response(struct xdp_sock *xsk, const struct 
         entry.hits = 0;
     }
 
-    uint16_t len = ntohs(udph->len);
+    uint16_t len = desc->len - sizeof(struct ethhdr) - sizeof(struct iphdr) - sizeof(struct udphdr);
 
     entry.udp_data = calloc(sizeof(uint8_t), len + 1);
     memcpy(entry.udp_data, udp_data, len);
@@ -291,6 +304,7 @@ static inline int save_and_enq_info_response(struct xdp_sock *xsk, const struct 
     entry.age = (tspec.tv_sec * 1e9) + tspec.tv_nsec;
     entry.csum = csum_partial(udp_data, len, 0);
     bpf_map_update_elem(a2s_cache_map_fd, &iph->saddr, &entry, BPF_ANY);
+    release_cache_lock();
 
     xq_enq(&xsk->tx, desc, 1);
     xsk->outstanding_tx++;
@@ -303,7 +317,7 @@ static inline int load_and_enq_info_response(struct xdp_sock *xsk, struct xdp_de
 
     if (likely(entry.udp_data)) {
         memcpy(udp_data, entry.udp_data, entry.len);
-        int16_t len_diff = entry.len - (ntohs(udph->len) - sizeof(struct udphdr));
+        int16_t len_diff = entry.len - (desc->len - sizeof(struct ethhdr) - sizeof(struct iphdr) - sizeof(struct udphdr));
         desc->len += len_diff;
 
         udph->len = htons(entry.len + sizeof(struct udphdr));
@@ -487,10 +501,15 @@ struct xdp_sock *xsk_configure(struct xdp_umem *umem, int ifindex) {
 
 void load_skb_program(const char *ifname, int ifindex, int xsk_map_fd, int a2s_info_cache_map_fd) {
     a2s_cache_map_fd = a2s_info_cache_map_fd;
+    xassert(pthread_mutex_init(&a2s_cache_lock, NULL) == 0);
 
-    struct xdp_sock *xsk = xsk_configure(NULL, ifindex);
-    uint32_t key = 0;
-    xassert(bpf_map_update_elem(xsk_map_fd, &key, &xsk->sfd, BPF_ANY) == 0);
-
-    xsk_cache_run(xsk);
+    int num_cpus = get_nprocs_conf();
+    if (num_cpus > MAX_CPUS) {
+        num_cpus = MAX_CPUS;
+    }
+    for (int cpu_id = 0; cpu_id < num_cpus; cpu_id++) {
+        struct xdp_sock *xsk = xsk_configure(NULL, ifindex);
+        xassert(bpf_map_update_elem(xsk_map_fd, &cpu_id, &xsk->sfd, BPF_ANY) == 0);
+        xsk_cache_run(xsk);
+    }
 }

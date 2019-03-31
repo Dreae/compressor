@@ -13,7 +13,8 @@
         "bpf_load.h": "c",
         "config.h": "c",
         "sysinfo.h": "c",
-        "libbpf.h": "c"
+        "libbpf.h": "c",
+        "poll.h": "c"
     },
     "licenser.author": "Dreae",
     "licenser.license": "GPLv3",
