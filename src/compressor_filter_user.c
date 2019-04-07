@@ -65,7 +65,7 @@ static void init_rate_limit_maps(int rate_limit_map_fd) {
     }
 }
 
-struct compressor_maps *load_xdp_prog(struct service_def **services, struct forwarding_rule **forwarding, struct in_addr **ip_whitelist, struct whitelisted_prefix **whitelisted_prefixes, struct config *cfg) {
+struct compressor_maps *load_xdp_prog(struct service_def **services, struct forwarding_rule **forwarding, struct config *cfg) {
     char *filename = "/etc/compressor/compressor_filter_kern.o";
 
     if (load_bpf_file(filename)) {
@@ -128,12 +128,6 @@ struct compressor_maps *load_xdp_prog(struct service_def **services, struct forw
     }
     int new_conn_map_fd = map_fd[9];
 
-    if(!map_fd[10]) {
-        fprintf(stderr, "Error findind prefix whitelist in XDP program\n");
-        return 0;
-    }
-    int prefix_whitelist_fd = map_fd[10];
-
     struct service_def *service;
     int idx = 0;
     uint8_t enable = 1;
@@ -158,41 +152,6 @@ struct compressor_maps *load_xdp_prog(struct service_def **services, struct forw
         }
 
         idx++;
-    }
-
-    struct in_addr *ip;
-    idx = 0;
-    while((ip = ip_whitelist[idx]) != NULL) {
-        struct lpm_trie_key key = {
-            .prefixlen = 32,
-            .data = ip->s_addr
-        };
-        uint64_t value = ((uint64_t)0xffffffff << 32) | ip->s_addr;
-        err = bpf_map_update_elem(prefix_whitelist_fd, &key, &value, BPF_ANY);
-        if (err) {
-            fprintf(stderr, "Store whitelist IP map failed: (err:%d)\n", err);
-            perror("bpf_map_update_elem");
-            return 0;
-        }
-
-        idx++;
-    }
-
-    struct whitelisted_prefix *prefix;
-    idx = 0;
-    while((prefix = whitelisted_prefixes[idx++]) != NULL) {
-        struct lpm_trie_key key = {
-            .prefixlen = prefix->prefixlen,
-            .data = prefix->prefix
-        };
-
-        uint64_t value = ((uint64_t)prefix->bitmask << 32) | prefix->prefix;
-        err = bpf_map_update_elem(prefix_whitelist_fd, &key, &value, BPF_ANY);
-        if (err) {
-            fprintf(stderr, "Store whitelist prefix map failed: (err:%d)\n", err);
-            perror("bpf_map_update_elem");
-            return 0;
-        }
     }
 
     init_rate_limit_maps(rate_limit_map_fd);

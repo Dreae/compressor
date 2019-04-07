@@ -18,13 +18,13 @@
 CC = clang
 
 objects += src/compressor.o src/compressor_filter_user.o src/config.o src/bpf_load.o src/compressor_cache_user.o
-objects += src/compressor_cache_seed.o src/compressor_maxmind.o
+objects += src/compressor_cache_seed.o
 
 libbpf_objects += libbpf/src/bpf.o libbpf/src/btf.o libbpf/src/libbpf_errno.o libbpf/src/libbpf_probes.o
 libbpf_objects += libbpf/src/libbpf.o libbpf/src/netlink.o libbpf/src/nlattr.o libbpf/src/str_error.o
 
 CFLAGS += -Ilibbpf/src -g -O2 -Wall -Werror
-LDFLAGS += -lconfig -lpthread -lelf -lhiredis -larchive -lcurl
+LDFLAGS += -lconfig -lpthread -lelf -lhiredis
 
 all: compressor compressor_filter
 compressor: libbpf $(objects)

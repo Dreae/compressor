@@ -127,16 +127,6 @@ struct bpf_map_def SEC("maps") new_conn_map = {
     .max_entries = 1
 };
 
-// Map 10
-struct bpf_map_def SEC("maps") ip_prefix_whitelist_map = {
-    .type = BPF_MAP_TYPE_LPM_TRIE,
-    .key_size = sizeof(struct lpm_trie_key),
-    .value_size = sizeof(uint64_t),
-    .max_entries = 16384,
-    .map_flags = BPF_F_NO_PREALLOC
-};
-
-
 static __always_inline void copy_and_swap_hwaddr(struct ethhdr *new_hdr, struct ethhdr *old_hdr) {
     uint16_t *new_p = (uint16_t *)new_hdr;
     uint16_t *old_p = (uint16_t *)old_hdr;
@@ -304,22 +294,9 @@ int xdp_program(struct xdp_md *ctx) {
 
             return XDP_TX;
         } else {
-            uint8_t ip_whitelisted = 0;
-            struct lpm_trie_key key;
-            key.prefixlen = 32;
-            key.data = iph->saddr;
-            uint64_t *prefix_mask = bpf_map_lookup_elem(&ip_prefix_whitelist_map, &key);
-            if (prefix_mask) {
-                uint32_t bitmask = (*prefix_mask) >> 32;
-                uint32_t prefix = (*prefix_mask) & 0xffffffff;
-                if ((iph->saddr & bitmask) == prefix) {
-                    ip_whitelisted = 1;
-                }
-            }
-
             uint32_t cpu_id = bpf_get_smp_processor_id();
             void *lru_map = bpf_map_lookup_elem(&rate_limit_map, &cpu_id);
-            if (!lru_map) {
+            if (unlikely(lru_map == NULL)) {
                 // How?
                 return XDP_ABORTED;
             }
@@ -371,10 +348,6 @@ int xdp_program(struct xdp_md *ctx) {
 
                 uint32_t dest = (uint32_t)ntohs(udph->dest);
                 if (forward_rule) {
-                    if (udph->dest != htons(forward_rule->bind_port) && udph->dest != htons(forward_rule->steam_port) && !ip_whitelisted) {
-                        return XDP_DROP;
-                    }
-
                     // Drop zero length packets
                     // See https://wiki.alliedmods.net/SRCDS_Hardening#Force_fullupdate
                     if (udph->len == 0) {
@@ -432,13 +405,9 @@ int xdp_program(struct xdp_md *ctx) {
                     return forward_packet(ctx, forward_rule, 0x50);
                 }
 
-                if (ip_whitelisted) {
+                uint8_t *value = bpf_map_lookup_elem(&udp_services, &dest);
+                if (value && *value == 1) {
                     return XDP_PASS;
-                } else {
-                    uint8_t *value = bpf_map_lookup_elem(&udp_services, &dest);
-                    if (value && *value == 1) {
-                        return XDP_PASS;
-                    }
                 }
 
                 return XDP_DROP;
@@ -447,25 +416,21 @@ int xdp_program(struct xdp_md *ctx) {
                 if (tcph + 1 > (struct tcphdr *)data_end) {
                     return XDP_DROP;
                 }
-                struct forwarding_rule *forward_rule = bpf_map_lookup_elem(&forwarding_map, &iph->daddr);
 
-                if (forward_rule && ip_whitelisted) {
+                uint32_t dest = (uint32_t)ntohs(tcph->dest);
+                uint8_t *value = bpf_map_lookup_elem(&tcp_services, &dest);
+                if (value && *value == 1) {
+                    return XDP_PASS;
+                }
+
+                struct forwarding_rule *forward_rule = bpf_map_lookup_elem(&forwarding_map, &iph->daddr);
+                if (forward_rule) {
                     uint32_t daddr = iph->daddr;
                     iph->daddr = forward_rule->inner_addr;
                     iph->check = csum_diff4(daddr, iph->daddr, iph->check);
                     tcph->check = csum_diff4(daddr, iph->daddr, tcph->check);
 
                     return forward_packet(ctx, forward_rule, 0x00);
-                }
-
-                if (ip_whitelisted) {
-                    return XDP_PASS;
-                } else {
-                    uint32_t dest = (uint32_t)ntohs(tcph->dest);
-                    uint8_t *value = bpf_map_lookup_elem(&tcp_services, &dest);
-                    if (value && *value == 1) {
-                        return XDP_PASS;
-                    }
                 }
 
                 return XDP_DROP;

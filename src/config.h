@@ -44,17 +44,8 @@ struct forwarding_rule {
     uint_fast64_t cache_time;
 };
 
-
-struct whitelisted_prefix {
-    uint32_t bitmask;
-    uint32_t prefix;
-    uint32_t prefixlen;
-};
-
 struct service_def *parse_service(const char *service);
 struct forwarding_rule *parse_forwarding_rule(config_setting_t *cfg_rule);
-struct in_addr **parse_ip_whitelist(config_setting_t *whitelist);
-struct whitelisted_prefix **parse_asn_whitelist(config_setting_t *whitelist);
 
 static inline void free_array(void **array) {
     void *elem;

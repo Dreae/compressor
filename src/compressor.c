@@ -36,7 +36,6 @@ int ifindex;
 #include "compressor_filter_user.h"
 #include "compressor_cache_user.h"
 #include "compressor_cache_seed.h"
-#include "compressor_maxmind.h"
 
 int get_iface_mac_address(const char *interface, uint16_t *addr) {
     char filename[256];
@@ -147,16 +146,6 @@ int main(int argc, char **argv) {
             }
         }
 
-        config_setting_t *whitelist = config_lookup(&config, "ip_whitelist");
-        struct in_addr **whitelisted_ips = parse_ip_whitelist(whitelist);
-
-        config_setting_t *asn_whitelist = config_lookup(&config, "asn_whitelist");
-        struct whitelisted_prefix **whitelisted_prefixes;
-        if (asn_whitelist) {
-            compressor_update_maxmind();
-            whitelisted_prefixes = parse_asn_whitelist(asn_whitelist);
-        }
-
         config_setting_t *redis = config_lookup(&config, "redis_cache");
         uint32_t redis_addr = 0;
         int redis_port = 0;
@@ -189,7 +178,7 @@ int main(int argc, char **argv) {
         cfg.hw3 = htons(hwaddr[2]);
 
         struct compressor_maps *maps;
-        if (!(maps = load_xdp_prog(service_defs, forwarding_rules, whitelisted_ips, whitelisted_prefixes, &cfg))) {
+        if (!(maps = load_xdp_prog(service_defs, forwarding_rules, &cfg))) {
             return 1;
         }
 
@@ -200,10 +189,6 @@ int main(int argc, char **argv) {
 
         free_array((void **)service_defs);
         free_array((void **)forwarding_rules);
-        free_array((void **)whitelisted_prefixes);
-        if (whitelisted_ips) {
-            free_array((void **)whitelisted_ips);
-        }
         config_destroy(&config);
     } else {
         perror("Error reading configuration file");
