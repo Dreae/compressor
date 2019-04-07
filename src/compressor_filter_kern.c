@@ -100,7 +100,7 @@ struct bpf_map_def SEC("maps") rate_limit_map = {
     .type = BPF_MAP_TYPE_ARRAY_OF_MAPS,
     .key_size = sizeof(uint32_t),
     .max_entries = MAX_CPUS,
-    .inner_map_idx = 7
+    .inner_map_idx = 5
 };
 
 // Map 7
