@@ -65,7 +65,7 @@ static void init_rate_limit_maps(int rate_limit_map_fd) {
     }
 }
 
-struct compressor_maps *load_xdp_prog(struct service_def **services, struct forwarding_rule **forwarding, struct config *cfg) {
+struct compressor_maps *load_xdp_prog(struct forwarding_rule **forwarding, struct config *cfg) {
     char *filename = "/etc/compressor/compressor_filter_kern.o";
 
     if (load_bpf_file(filename)) {
@@ -75,89 +75,53 @@ struct compressor_maps *load_xdp_prog(struct service_def **services, struct forw
     }
 
     if (!map_fd[0]) {
-        fprintf(stderr, "Error finding TCP service map in XDP program\n");
-        return 0;
-    }
-    int tcp_service_fd = map_fd[0];
-
-    if (!map_fd[1]) {
-        fprintf(stderr, "Error finding UDP service map in XDP program\n");
-        return 0;
-    }
-    int udp_service_fd = map_fd[1];
-
-    if (!map_fd[2]) {
         fprintf(stderr, "Error finding config map in XDP program\n");
         return 0;
     }
-    int config_map_fd = map_fd[2];
+    int config_map_fd = map_fd[0];
 
-    if (!map_fd[3]) {
+    if (!map_fd[1]) {
         fprintf(stderr, "Error finding forwarding map in XDP program\n");
         return 0;
     }
-    int forwarding_rules_fd = map_fd[3];
+    int forwarding_rules_fd = map_fd[1];
 
-    if (!map_fd[4]) {
+    if (!map_fd[2]) {
         fprintf(stderr, "Error finding tunneling map in XDP program\n");
         return 0;
     }
-    int tunnel_map_fd = map_fd[4];
+    int tunnel_map_fd = map_fd[2];
 
-    if (!map_fd[5]) {
+    if (!map_fd[3]) {
         fprintf(stderr, "Error finding XSK map in XDP program\n");
         return 0;
     }
-    int xsk_map_fd = map_fd[5];
+    int xsk_map_fd = map_fd[3];
 
-    if(!map_fd[6]) {
+    if(!map_fd[4]) {
         fprintf(stderr, "Error finding A2S_INFO cache map in XDP program\n");
         return 0;
     }
-    int a2s_cache_map_fd = map_fd[6];
+    int a2s_cache_map_fd = map_fd[4];
 
-    if(!map_fd[8]) {
+    if(!map_fd[6]) {
         fprintf(stderr, "Error finding rate limit map in XDP program\n");
         return 0;
     }
-    int rate_limit_map_fd = map_fd[8];
+    int rate_limit_map_fd = map_fd[6];
 
-    if(!map_fd[9]) {
+    if(!map_fd[7]) {
         fprintf(stderr, "Error finding new connection map in XDP program\n");
         return 0;
     }
-    int new_conn_map_fd = map_fd[9];
+    int new_conn_map_fd = map_fd[7];
 
-    struct service_def *service;
-    int idx = 0;
-    uint8_t enable = 1;
-
-    int err = 0;
-    while ((service = services[idx]) != NULL) {
-        uint32_t dest = (uint32_t)service->port;
-        if (service->proto == PROTO_TCP) {
-            err = bpf_map_update_elem(tcp_service_fd, &dest, &enable, BPF_ANY);
-            printf("Adding service %d/tcp\n", dest);
-        } else if (service->proto == PROTO_UDP) {
-            err = bpf_map_update_elem(udp_service_fd, &dest, &enable, BPF_ANY);
-            printf("Adding service %d/udp\n", dest);
-        } else {
-            fprintf(stderr, "Got unknown service protocol %d\n", service->proto);
-        }
-
-        if (err) {
-            fprintf(stderr, "Store service port failed: (err:%d)\n", err);
-            perror("bpf_map_update_elem");
-            return 0;
-        }
-
-        idx++;
-    }
 
     init_rate_limit_maps(rate_limit_map_fd);
 
+    int idx = 0;
+    int err = 0;
     struct forwarding_rule *rule;
-    idx = 0;
     while ((rule = forwarding[idx]) != NULL) {
         struct in_addr bind_addr;
         bind_addr.s_addr = rule->bind_addr;

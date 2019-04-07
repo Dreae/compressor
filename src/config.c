@@ -25,41 +25,6 @@
 #include <arpa/inet.h>
 #include "config.h"
 
-struct service_def *parse_service(const char *service) {
-    char buffer[128];
-    strcpy(buffer, service);
-
-    char *port = strtok(buffer, "/");
-    char *proto = strtok(NULL, "/");
-    if (port == NULL || proto == NULL) {
-        fprintf(stderr, "Error parsing service definition: %s\n", service);
-        return NULL;
-    }
-
-    uint16_t iport = atoi(port);
-    if (iport == 0) {
-        fprintf(stderr, "Invalid port defined for service %s\n", service);
-        return NULL;
-    }
-
-    if (strcmp(proto, "tcp") == 0) {
-        struct service_def *def = calloc(1, sizeof(struct service_def));
-        def->port = iport;
-        def->proto = PROTO_TCP;
-
-        return def;
-    } else if (strcmp(proto, "udp") == 0) {
-        struct service_def *def = calloc(1, sizeof(struct service_def));
-        def->port = iport;
-        def->proto = PROTO_UDP;
-
-        return def;
-    } else {
-        fprintf(stderr, "Invalid protocol defined for service %s\n", service);
-        return NULL;
-    }
-}
-
 struct forwarding_rule *parse_forwarding_rule(config_setting_t *cfg_rule) {
     const char *bindstr;
     const char *deststr;

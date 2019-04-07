@@ -1,18 +1,18 @@
 /**
  * Copyright (C) 2019 dreae
- * 
+ *
  * This file is part of compressor.
- * 
+ *
  * compressor is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, either version 3 of the License, or
  * (at your option) any later version.
- * 
+ *
  * compressor is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
- * 
+ *
  * You should have received a copy of the GNU General Public License
  * along with compressor.  If not, see <http://www.gnu.org/licenses/>.
  */
@@ -46,22 +46,6 @@ struct bpf_map_def {
 };
 
 // Map 0
-struct bpf_map_def SEC("maps") tcp_services = {
-    .type = BPF_MAP_TYPE_ARRAY,
-    .key_size = sizeof(uint32_t),
-    .value_size = sizeof(uint8_t),
-    .max_entries = 65536
-};
-
-// Map 1
-struct bpf_map_def SEC("maps") udp_services = {
-    .type = BPF_MAP_TYPE_ARRAY,
-    .key_size = sizeof(uint32_t),
-    .value_size = sizeof(uint8_t),
-    .max_entries = 65536
-};
-
-// Map 2
 struct bpf_map_def SEC("maps") config_map = {
     .type = BPF_MAP_TYPE_ARRAY,
     .key_size = sizeof(uint32_t),
@@ -69,7 +53,7 @@ struct bpf_map_def SEC("maps") config_map = {
     .max_entries = 1
 };
 
-// Map 3
+// Map 1
 struct bpf_map_def SEC("maps") forwarding_map = {
     .type = BPF_MAP_TYPE_HASH,
     .key_size = sizeof(uint32_t),
@@ -79,7 +63,7 @@ struct bpf_map_def SEC("maps") forwarding_map = {
 
 // Keyed by (dest_ip << 32) | internal_ip to support
 // multiple internal IPs on the same host
-// Map 4
+// Map 2
 struct bpf_map_def SEC("maps") tunnel_map = {
     .type = BPF_MAP_TYPE_HASH,
     .key_size = sizeof(uint64_t),
@@ -87,7 +71,7 @@ struct bpf_map_def SEC("maps") tunnel_map = {
     .max_entries = 256
 };
 
-// Map 5
+// Map 3
 struct bpf_map_def SEC("maps") xsk_map = {
     .type = BPF_MAP_TYPE_XSKMAP,
     .key_size = sizeof(uint32_t),
@@ -95,7 +79,7 @@ struct bpf_map_def SEC("maps") xsk_map = {
     .max_entries = MAX_CPUS
 };
 
-// Map 6
+// Map 4
 struct bpf_map_def SEC("maps") a2s_info_cache_map = {
     .type = BPF_MAP_TYPE_HASH,
     .key_size = sizeof(uint32_t),
@@ -103,7 +87,7 @@ struct bpf_map_def SEC("maps") a2s_info_cache_map = {
     .max_entries = 255
 };
 
-// Map 7
+// Map 5
 struct bpf_map_def SEC("maps") rate_limit_inner_map = {
     .type = BPF_MAP_TYPE_LRU_HASH,
     .key_size = sizeof(uint32_t),
@@ -111,7 +95,7 @@ struct bpf_map_def SEC("maps") rate_limit_inner_map = {
     .max_entries = LRU_SIZE
 };
 
-// Map 8
+// Map 6
 struct bpf_map_def SEC("maps") rate_limit_map = {
     .type = BPF_MAP_TYPE_ARRAY_OF_MAPS,
     .key_size = sizeof(uint32_t),
@@ -119,7 +103,7 @@ struct bpf_map_def SEC("maps") rate_limit_map = {
     .inner_map_idx = 7
 };
 
-// Map 9
+// Map 7
 struct bpf_map_def SEC("maps") new_conn_map = {
     .type = BPF_MAP_TYPE_PERCPU_ARRAY,
     .key_size = sizeof(uint32_t),
@@ -405,22 +389,11 @@ int xdp_program(struct xdp_md *ctx) {
                     return forward_packet(ctx, forward_rule, 0x50);
                 }
 
-                uint8_t *value = bpf_map_lookup_elem(&udp_services, &dest);
-                if (value && *value == 1) {
-                    return XDP_PASS;
-                }
-
-                return XDP_DROP;
+                return XDP_PASS;
             } else if (iph->protocol == IPPROTO_TCP) {
                 struct tcphdr *tcph = data + sizeof(struct ethhdr) + sizeof(struct iphdr);
                 if (tcph + 1 > (struct tcphdr *)data_end) {
                     return XDP_DROP;
-                }
-
-                uint32_t dest = (uint32_t)ntohs(tcph->dest);
-                uint8_t *value = bpf_map_lookup_elem(&tcp_services, &dest);
-                if (value && *value == 1) {
-                    return XDP_PASS;
                 }
 
                 struct forwarding_rule *forward_rule = bpf_map_lookup_elem(&forwarding_map, &iph->daddr);
@@ -433,7 +406,7 @@ int xdp_program(struct xdp_md *ctx) {
                     return forward_packet(ctx, forward_rule, 0x00);
                 }
 
-                return XDP_DROP;
+                return XDP_PASS;
             } else if (iph->protocol == IPPROTO_ICMP) {
                 struct icmphdr *icmph = data + sizeof(struct ethhdr) + sizeof(struct iphdr);
                 if (icmph + 1 > (struct icmphdr *)data_end) {

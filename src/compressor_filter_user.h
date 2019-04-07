@@ -47,4 +47,4 @@ struct ip_addr_history {
 
 extern int ifindex;
 
-struct compressor_maps *load_xdp_prog(struct service_def **services, struct forwarding_rule **forwarding, struct config *cfg);
+struct compressor_maps *load_xdp_prog(struct forwarding_rule **forwarding, struct config *cfg);

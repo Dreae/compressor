@@ -109,24 +109,6 @@ int main(int argc, char **argv) {
         cfg.rate_limit = rate_limit;
         cfg.new_conn_limit = new_conn_limit;
 
-        config_setting_t *services = config_lookup(&config, "services");
-        struct service_def **service_defs = calloc(65535 * 2, sizeof(struct service_def *));
-        if (services) {
-            int num_service = 0;
-            
-            const char *service;
-            int idx = 0;
-            while ((service = config_setting_get_string_elem(services, idx)) != NULL) {
-                struct service_def *def = parse_service(service);
-                if (def != NULL) {
-                    service_defs[num_service] = def;
-                    num_service++;
-                }
-
-                idx++;
-            }
-        }
-
         config_setting_t *forwarding = config_lookup(&config, "srcds");
         struct forwarding_rule **forwarding_rules = calloc(255, sizeof(struct forwarding_rule *));
         if (forwarding) {
@@ -178,7 +160,7 @@ int main(int argc, char **argv) {
         cfg.hw3 = htons(hwaddr[2]);
 
         struct compressor_maps *maps;
-        if (!(maps = load_xdp_prog(service_defs, forwarding_rules, &cfg))) {
+        if (!(maps = load_xdp_prog(forwarding_rules, &cfg))) {
             return 1;
         }
 
@@ -187,7 +169,6 @@ int main(int argc, char **argv) {
             start_cache_seeding(maps->a2s_cache_map_fd, forwarding_rules, redis_addr, redis_port);
         }
 
-        free_array((void **)service_defs);
         free_array((void **)forwarding_rules);
         config_destroy(&config);
     } else {
