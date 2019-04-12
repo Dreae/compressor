@@ -396,6 +396,10 @@ int xdp_program(struct xdp_md *ctx) {
                     return XDP_DROP;
                 }
 
+                if (tcph->dest == htons(22)) {
+                    return XDP_PASS;
+                }
+
                 struct forwarding_rule *forward_rule = bpf_map_lookup_elem(&forwarding_map, &iph->daddr);
                 if (forward_rule) {
                     uint32_t daddr = iph->daddr;

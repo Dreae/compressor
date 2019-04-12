@@ -47,6 +47,7 @@
 #include "bpf_load.h"
 #include "srcds_util.h"
 #include "compressor_cache_user.h"
+#include "compressor_cache_seed.h"
 #include "compressor_filter_user.h"
 #include "xassert.h"
 #include "checksum.h"
@@ -308,6 +309,9 @@ static inline int save_and_enq_info_response(struct xdp_sock *xsk, const struct 
 
     xq_enq(&xsk->tx, desc, 1);
     xsk->outstanding_tx++;
+
+    notify_a2s_redis(iph->saddr);
+
     return 1;
 }
 
