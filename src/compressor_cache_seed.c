@@ -200,9 +200,10 @@ void *seed_cache(void *arg) {
     pthread_t publish_thread;
     xassert(pthread_create(&publish_thread, NULL, signal_cache, (void *)publish_params) == 0);
 
-    for (;;) {
-        event_base_dispatch(base);
-    }
+    event_base_dispatch(base);
+
+    fprintf(stderr, "Redis event loop exited, cleaning up\n");
+    event_base_free(base);
 }
 
 void start_seed_thread(struct forwarding_rule **rules, int cache_map_fd, uint32_t redis_addr, uint16_t redis_port) {
