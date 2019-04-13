@@ -18,7 +18,8 @@
 #pragma once
 
 void load_skb_program(const char *ifname, int ifindex, int xsk_map_fd, int a2s_info_cache_map_fd);
-void get_cache_lock(void);
+void get_cache_rlock(void);
+void get_cache_wlock(void);
 void release_cache_lock(void);
 
 struct a2s_info_cache_entry {

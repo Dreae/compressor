@@ -14,7 +14,11 @@
         "config.h": "c",
         "sysinfo.h": "c",
         "libbpf.h": "c",
-        "poll.h": "c"
+        "poll.h": "c",
+        "stdlib.h": "c",
+        "features.h": "c",
+        "mman.h": "c",
+        "pthread.h": "c"
     },
     "licenser.author": "Dreae",
     "licenser.license": "GPLv3",

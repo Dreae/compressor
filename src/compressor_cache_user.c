@@ -17,6 +17,8 @@
  * along with compressor.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#define _GNU_SOURCE
+
 #include <assert.h>
 #include <linux/if_packet.h>
 #include <sys/socket.h>
@@ -37,6 +39,7 @@
 #include <unistd.h>
 #include <sys/resource.h>
 #include <stdlib.h>
+#include <features.h>
 #include <pthread.h>
 #include <linux/bpf.h>
 #include <linux/bpf_common.h>
@@ -110,14 +113,18 @@ struct xdp_sock {
 
 static int a2s_cache_map_fd;
 
-static pthread_mutex_t a2s_cache_lock;
+static pthread_rwlock_t a2s_cache_lock;
 
-__always_inline void get_cache_lock(void) {
-    pthread_mutex_lock(&a2s_cache_lock);
+__always_inline void get_cache_wlock(void) {
+    pthread_rwlock_wrlock(&a2s_cache_lock);
+}
+
+__always_inline void get_cache_rlock(void) {
+    pthread_rwlock_rdlock(&a2s_cache_lock);
 }
 
 __always_inline void release_cache_lock(void) {
-    pthread_mutex_unlock(&a2s_cache_lock);
+    pthread_rwlock_unlock(&a2s_cache_lock);
 }
 
 static inline int umem_nb_free(struct xdp_umem_uqueue *q, uint32_t nb) {
@@ -286,11 +293,10 @@ static inline int save_and_enq_info_response(struct xdp_sock *xsk, const struct 
     struct timespec tspec;
     clock_gettime(CLOCK_MONOTONIC, &tspec);
 
-    get_cache_lock();
+    get_cache_wlock();
     bpf_map_lookup_elem(a2s_cache_map_fd, &iph->saddr, &entry);
-    if (entry.udp_data) {
-        free(entry.udp_data);
-    }
+    
+    uint8_t *old_data = entry.udp_data;
 
     if (entry.hits) {
         entry.misses = 0;
@@ -306,6 +312,10 @@ static inline int save_and_enq_info_response(struct xdp_sock *xsk, const struct 
     entry.csum = csum_partial(udp_data, len, 0);
     bpf_map_update_elem(a2s_cache_map_fd, &iph->saddr, &entry, BPF_ANY);
     release_cache_lock();
+
+    if (old_data) {
+        free(old_data);
+    }
 
     xq_enq(&xsk->tx, desc, 1);
     xsk->outstanding_tx++;
@@ -505,7 +515,7 @@ struct xdp_sock *xsk_configure(struct xdp_umem *umem, int ifindex) {
 
 void load_skb_program(const char *ifname, int ifindex, int xsk_map_fd, int a2s_info_cache_map_fd) {
     a2s_cache_map_fd = a2s_info_cache_map_fd;
-    xassert(pthread_mutex_init(&a2s_cache_lock, NULL) == 0);
+    xassert(pthread_rwlock_init(&a2s_cache_lock, NULL) == 0);
 
     int num_cpus = get_nprocs_conf();
     if (num_cpus > MAX_CPUS) {

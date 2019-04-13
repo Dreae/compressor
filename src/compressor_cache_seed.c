@@ -49,7 +49,7 @@ struct subscribe_arg {
 
 struct publish_arg {
     struct forwarding_rule **rules;
-    redisAsyncContext *redis;
+    redisContext *redis;
     int cache_map_fd;
 };
 
@@ -75,16 +75,14 @@ void on_server_update(redisAsyncContext *redis, void *reply, void *data) {
         clock_gettime(CLOCK_MONOTONIC, &tspec);
         uint64_t kernel_time = (tspec.tv_sec * 1e9) + tspec.tv_nsec;
 
-        get_cache_lock();
+        get_cache_wlock();
         bpf_map_lookup_elem(arg->cache_map_fd, &arg->rule->bind_addr, &entry);
         if (entry.hits) {
             entry.hits = 0;
             entry.misses = 0;
         }
 
-        if (entry.udp_data) {
-            free(entry.udp_data);
-        }
+        uint8_t *old_data = entry.udp_data;
 
         void *redis_data = (void *)r->element[2]->str;
         uint16_t ttl = *((uint16_t *)redis_data);
@@ -99,6 +97,10 @@ void on_server_update(redisAsyncContext *redis, void *reply, void *data) {
 
         bpf_map_update_elem(arg->cache_map_fd, &arg->rule->bind_addr, &entry, BPF_ANY);
         release_cache_lock();
+
+        if (old_data) {
+            free(old_data);
+        }
     }
 }
 
@@ -128,6 +130,7 @@ void *signal_cache(void *arg) {
 
         if (rule != NULL) {
             struct a2s_info_cache_entry entry = { 0 };
+            get_cache_rlock();
             bpf_map_lookup_elem(params->cache_map_fd, &cache_server, &entry);
             if (entry.udp_data) {
                 struct timespec tspec;
@@ -144,9 +147,10 @@ void *signal_cache(void *arg) {
                         .s_addr = cache_server
                     };
 
-                    redisAsyncCommand(params->redis, NULL, NULL, "PUBLISH %s %b", inet_ntoa(addr), buffer, entry.len + sizeof(uint16_t));
+                    redisCommand(params->redis, "PUBLISH %s %b", inet_ntoa(addr), buffer, entry.len + sizeof(uint16_t));
                 }
             }
+            release_cache_lock();
         }
 
         pthread_mutex_unlock(&cache_notif_lock);
@@ -166,14 +170,14 @@ void *seed_cache(void *arg) {
         exit(1);
     }
 
-    redisAsyncContext *com_redis = redisAsyncConnect(inet_ntoa(addr), params->redis_port);
+    redisContext *com_redis = redisConnect(inet_ntoa(addr), params->redis_port);
     if (com_redis->err) {
         fprintf(stderr, "Error connected to redis: %s\n", com_redis->errstr);
         exit(1);
     }
+    redisEnableKeepAlive(com_redis);
 
     redisLibeventAttach(sub_redis, base);
-    redisLibeventAttach(com_redis, base);
     struct forwarding_rule *rule;
     int idx = 0;
     while ((rule = params->rules[idx++]) != NULL) {
