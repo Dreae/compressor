@@ -204,6 +204,8 @@ void *seed_cache(void *arg) {
 
     fprintf(stderr, "Redis event loop exited, cleaning up\n");
     event_base_free(base);
+
+    return NULL;
 }
 
 void start_seed_thread(struct forwarding_rule **rules, int cache_map_fd, uint32_t redis_addr, uint16_t redis_port) {
