@@ -434,6 +434,15 @@ int xdp_program(struct xdp_md *ctx) {
                     return XDP_TX;
                 }
 
+                struct forwarding_rule *forward_rule = bpf_map_lookup_elem(&forwarding_map, iph->daddr);
+                if (forward_rule) {
+                    uint32_t daddr = iph->daddr;
+                    iph->daddr = forward_rule->inner_addr;
+                    iph->check = csum_diff4(daddr, iph->daddr, iph->check);
+
+                    return forward_packet(ctx, forward_rule, 0x00);
+                }
+
                 return XDP_DROP;
             }
         }
