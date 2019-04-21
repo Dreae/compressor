@@ -339,47 +339,50 @@ int xdp_program(struct xdp_md *ctx) {
                     }
 
                     const uint8_t *udp_bytes = data + sizeof(struct ethhdr) + sizeof(struct iphdr) + sizeof(struct udphdr);
-                    if (!(udp_bytes + 5 > (uint8_t *)data_end)) {
-                        // Drop A2C_PRINT
-                        // See https://wiki.alliedmods.net/SRCDS_Hardening#A2C_PRINT_Spam
-                        if (check_srcds_header(udp_bytes, 0x6c)) {
-                            return XDP_DROP;
-                        }
+                    if (dest == forward_rule->bind_port) {
+                        if (!(udp_bytes + 5 > (uint8_t *)data_end)) {
+                            // Drop A2C_PRINT
+                            // See https://wiki.alliedmods.net/SRCDS_Hardening#A2C_PRINT_Spam
+                            if (check_srcds_header(udp_bytes, 0x6c)) {
+                                return XDP_DROP;
+                            }
 
-                        if (check_srcds_header(udp_bytes, 0x54) && forward_rule->a2s_info_cache) {
-                            struct a2s_info_cache_entry *entry = bpf_map_lookup_elem(&a2s_info_cache_map, &iph->daddr);
-                            if (entry) {
-                                if ((entry->misses > forward_rule->a2s_info_cache || forward_rule->a2s_info_cache == 1) && bpf_ktime_get_ns() - entry->age < forward_rule->cache_time) {
-                                    __sync_fetch_and_add(&entry->hits, 1);
+                            if (check_srcds_header(udp_bytes, 0x54) && forward_rule->a2s_info_cache) {
+                                struct a2s_info_cache_entry *entry = bpf_map_lookup_elem(&a2s_info_cache_map, &iph->daddr);
+                                if (entry) {
+                                    if ((entry->misses > forward_rule->a2s_info_cache || forward_rule->a2s_info_cache == 1) && bpf_ktime_get_ns() - entry->age < forward_rule->cache_time) {
+                                        __sync_fetch_and_add(&entry->hits, 1);
 
-                                    // Set up address so all userspace needs to do is fill out the
-                                    // data and retransmit
-                                    uint32_t saddr = iph->saddr;
-                                    iph->saddr = iph->daddr;
-                                    iph->daddr = saddr;
-                                    uint16_t dest = udph->dest;
-                                    udph->dest = udph->source;
-                                    udph->source = dest;
+                                        // Set up address so all userspace needs to do is fill out the
+                                        // data and retransmit
+                                        uint32_t saddr = iph->saddr;
+                                        iph->saddr = iph->daddr;
+                                        iph->daddr = saddr;
+                                        uint16_t dest = udph->dest;
+                                        udph->dest = udph->source;
+                                        udph->source = dest;
 
-                                    // We don't need to update checksums, since userspace will need to
-                                    // either way
-                                    swap_dest_src_hwaddr(data);
+                                        // We don't need to update checksums, since userspace will need to
+                                        // either way
+                                        swap_dest_src_hwaddr(data);
 
-                                    return bpf_redirect_map(&xsk_map, bpf_get_smp_processor_id(), 0);
+                                        return bpf_redirect_map(&xsk_map, bpf_get_smp_processor_id(), 0);
+                                    }
+
+                                    __sync_fetch_and_add(&entry->misses, 1);
                                 }
-
-                                __sync_fetch_and_add(&entry->misses, 1);
                             }
                         }
+
+                        // Do port translation only if we know what the port is doing
+                        if (forward_rule->bind_port != forward_rule->to_port) {
+                            uint32_t old_dest = udph->dest;
+                            uint32_t new_dest = htons(forward_rule->to_port);
+                            udph->dest = new_dest;
+                            udph->check = csum_diff4(old_dest, new_dest, udph->check);
+                        }
                     }
 
-                    // Do port translation only if we know what the port is doing
-                    if (dest == forward_rule->bind_port && forward_rule->bind_port != forward_rule->to_port) {
-                        uint32_t old_dest = udph->dest;
-                        uint32_t new_dest = htons(forward_rule->to_port);
-                        udph->dest = new_dest;
-                        udph->check = csum_diff4(old_dest, new_dest, udph->check);
-                    }
 
                     uint32_t daddr = iph->daddr;
                     iph->daddr = forward_rule->inner_addr;
