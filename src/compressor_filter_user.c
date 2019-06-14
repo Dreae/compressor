@@ -137,7 +137,8 @@ struct compressor_maps *load_xdp_prog(struct forwarding_rule **forwarding, struc
         strcpy(dest_str, inet_ntoa(dest_addr));
         strcpy(inner_str, inet_ntoa(inner_addr));
 
-        printf(
+        fprintf(
+            stderr,
             "Adding forwarding rule %s:%d <--> %s[%s]:%d (%d, A2S_INFO cache: %s)\n",
             bind_str,
             rule->bind_port,
@@ -205,6 +206,7 @@ struct compressor_maps *load_xdp_prog(struct forwarding_rule **forwarding, struc
     maps->xsk_map_fd = xsk_map_fd;
     maps->rate_limit_map_fd = rate_limit_map_fd;
     maps->new_conn_map_fd = new_conn_map_fd;
+    maps->forwarding_map_fd = forwarding_rules_fd;
 
     return maps;
 }

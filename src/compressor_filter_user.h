@@ -28,6 +28,7 @@ struct compressor_maps {
     int rate_limit_map_fd;
     int new_conn_map_fd;
     int a2s_cache_map_fd;
+    int forwarding_map_fd;
 };
 
 struct lpm_trie_key {

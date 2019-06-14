@@ -231,7 +231,7 @@ void start_cache_seeding(int cache_map_fd, struct forwarding_rule **rules, uint3
         idx++;
     }
 
-    printf("Starting redis seed threads\n");
+    printf(stderr, "Starting redis seed threads\n");
     xassert(pthread_mutex_init(&cache_notif_lock, NULL) == 0);
     xassert(pthread_cond_init(&cache_notif_server, NULL) == 0);
 

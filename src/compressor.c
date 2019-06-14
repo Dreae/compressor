@@ -31,6 +31,7 @@
 
 #include "compressor.h"
 #include "config.h"
+#include "cockpit_port.h"
 
 int ifindex;
 #include "compressor_filter_user.h"
@@ -109,6 +110,9 @@ int main(int argc, char **argv) {
         cfg.rate_limit = rate_limit;
         cfg.new_conn_limit = new_conn_limit;
 
+        int cockpit_enabled = 0;
+        config_lookup_bool(&config, "cockpit_enabled", &cockpit_enabled);
+
         config_setting_t *forwarding = config_lookup(&config, "srcds");
         struct forwarding_rule **forwarding_rules = calloc(255, sizeof(struct forwarding_rule *));
         if (forwarding) {
@@ -167,6 +171,9 @@ int main(int argc, char **argv) {
         load_skb_program(interface, ifindex, maps->xsk_map_fd, maps->a2s_cache_map_fd);
         if (redis_addr && redis_port) {
             start_cache_seeding(maps->a2s_cache_map_fd, forwarding_rules, redis_addr, redis_port);
+        }
+        if(cockpit_enabled) {
+            start_cockpit_port(maps);
         }
 
         free_array((void **)forwarding_rules);
