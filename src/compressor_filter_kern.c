@@ -111,6 +111,14 @@ struct bpf_map_def SEC("maps") new_conn_map = {
     .max_entries = 1
 };
 
+// Map 8
+struct bpf_map_def SEC("maps") stats_map = {
+    .type = BPF_MAP_TYPE_PERCPU_ARRAY,
+    .key_size = sizeof(uint32_t),
+    .value_size = sizeof(struct compressor_stats),
+    .max_entries = 1
+};
+
 static __always_inline void copy_and_swap_hwaddr(struct ethhdr *new_hdr, struct ethhdr *old_hdr) {
     uint16_t *new_p = (uint16_t *)new_hdr;
     uint16_t *old_p = (uint16_t *)old_hdr;
@@ -189,6 +197,11 @@ int xdp_program(struct xdp_md *ctx) {
     cfg = bpf_map_lookup_elem(&config_map, &key);
     if (!cfg) {
         return XDP_ABORTED;
+    }
+
+    struct compressor_stats *stats = bpf_map_lookup_elem(&stats_map, &key);
+    if (stats) {
+        stats->packet_count++;
     }
 
     if (likely(eth->h_proto == htons(ETH_P_IP))) {

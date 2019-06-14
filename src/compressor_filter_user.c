@@ -116,6 +116,12 @@ struct compressor_maps *load_xdp_prog(struct forwarding_rule **forwarding, struc
     }
     int new_conn_map_fd = map_fd[7];
 
+    if(!map_fd[8]) {
+        fprintf(stderr, "Error finding stats map in XDP program\n");
+        return 0;
+    }
+    int stats_map_fd = map_fd[8];
+
 
     init_rate_limit_maps(rate_limit_map_fd);
 
@@ -202,11 +208,13 @@ struct compressor_maps *load_xdp_prog(struct forwarding_rule **forwarding, struc
     }
 
     struct compressor_maps *maps = malloc(sizeof(struct compressor_maps));
+    maps->config_map_fd = config_map_fd;
     maps->a2s_cache_map_fd = a2s_cache_map_fd;
     maps->xsk_map_fd = xsk_map_fd;
     maps->rate_limit_map_fd = rate_limit_map_fd;
     maps->new_conn_map_fd = new_conn_map_fd;
     maps->forwarding_map_fd = forwarding_rules_fd;
-
+    maps->stats_map_fd = stats_map_fd;
+    
     return maps;
 }

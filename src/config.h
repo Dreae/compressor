@@ -23,10 +23,6 @@
 #include <stdlib.h>
 
 struct config {
-    uint16_t hw1;
-    uint16_t hw2;
-    uint16_t hw3;
-    uint32_t bgp_peer;
     uint_fast64_t new_conn_limit;
     uint_fast64_t rate_limit;
 };

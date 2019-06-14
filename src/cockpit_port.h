@@ -21,6 +21,20 @@
 
 #include "compressor_filter_user.h"
 
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+#define htonll(x) ((__be64)___constant_swab64((x)))
+#define ntohll(x) ((__be64)___constant_swab64((x)))
+#else
+#define htonll(x) (x)
+#define ntohll(x) (x)
+#endif
+
+enum cockpit_command {
+  NONE = 0,
+  SERVER_UPDATE,
+  CURRENT_PPS
+};
+
 void start_cockpit_port(struct compressor_maps *forwarding_map_fd);
 
 struct server_update_msg {

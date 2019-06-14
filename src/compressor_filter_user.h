@@ -24,11 +24,13 @@
 #define LRU_SIZE 16384
 
 struct compressor_maps {
+    int config_map_fd;
     int xsk_map_fd;
     int rate_limit_map_fd;
     int new_conn_map_fd;
     int a2s_cache_map_fd;
     int forwarding_map_fd;
+    int stats_map_fd;
 };
 
 struct lpm_trie_key {
@@ -44,6 +46,10 @@ struct compressor_new_ips {
 struct ip_addr_history {
     uint_fast64_t timestamp;
     uint_fast64_t hits;
+};
+
+struct compressor_stats {
+    uint64_t packet_count;
 };
 
 extern int ifindex;
