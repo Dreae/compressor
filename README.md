@@ -54,7 +54,7 @@ This should create an IPIP tunnel named `compressor` in your network interfaces.
 Once the IPIP tunnel is created, you'll need to create the net namespace, and configure the tunnel to be the default interface inside the namespace.
 ```bash
 root@gameserver:~# ip netns add compressorns
-root@gameserver:~# ip link set compressorns netns compressor
+root@gameserver:~# ip link set compressor netns compressorns
 ```
 These commands will create a network namespace named `compressorns` and move the `compressor` tunnel interfaces into this namespace. After that you will need to
 configure the tunnel interface as the default interface in the namespace.
@@ -62,6 +62,11 @@ configure the tunnel interface as the default interface in the namespace.
 root@gameserver:~# ip netns exec compressorns ip addr add <gameserver address> dev compressor
 root@gameserver:~# ip netns exec compressorns ip link set compressor up
 root@gameserver:~# ip netns exec compressorns ip route add default dev compressor
+```
+
+Finally you will need to set the DNS servers for the gameserver to something accessible from the internet, such as Cloudflare's DNS
+```bash
+root@gameserver:~# printf 'nameserver 1.1.1.1\nnameserver 1.0.0.1' > /etc/resolv.conf
 ```
 
 After completing these steps you should be able run srcds inside the namespace, and all traffic will be routed through compressor.

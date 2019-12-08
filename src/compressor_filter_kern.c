@@ -433,23 +433,6 @@ int xdp_program(struct xdp_md *ctx) {
                     return XDP_ABORTED;
                 }
 
-                if (icmph->type == ICMP_ECHO) {
-                    uint32_t saddr = iph->saddr;
-                    uint32_t daddr = iph->daddr;
-                    iph->saddr = daddr;
-                    iph->daddr = saddr;
-
-                    uint8_t old_ttl = iph->ttl;
-                    iph->ttl = 64;
-                    iph->check = csum_diff4(old_ttl, 64, iph->check);
-
-                    icmph->type = ICMP_ECHOREPLY;
-                    icmph->checksum = csum_diff4(ICMP_ECHO, ICMP_ECHOREPLY, icmph->checksum);
-                    swap_dest_src_hwaddr(data);
-
-                    return XDP_TX;
-                }
-
                 struct forwarding_rule *forward_rule = bpf_map_lookup_elem(&forwarding_map, &iph->daddr);
                 if (forward_rule) {
                     uint32_t daddr = iph->daddr;
