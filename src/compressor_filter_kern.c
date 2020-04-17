@@ -275,7 +275,7 @@ int xdp_program(struct xdp_md *ctx) {
                     uint8_t *udpdata = data + sizeof(struct ethhdr) + sizeof(struct iphdr) + sizeof(struct udphdr);
                     if (!(udpdata + 5 > (uint8_t *)data_end)) {
                         if (check_srcds_header(udpdata, 0x49) && tunnel_rule->a2s_info_cache) {
-                            return bpf_redirect_map(&xsk_map, bpf_get_smp_processor_id(), 0);
+                            return bpf_redirect_map(&xsk_map, ctx->rx_queue_index, 0);
                         }
                     }
                 }
@@ -379,7 +379,7 @@ int xdp_program(struct xdp_md *ctx) {
                                         // either way
                                         swap_dest_src_hwaddr(data);
 
-                                        return bpf_redirect_map(&xsk_map, bpf_get_smp_processor_id(), 0);
+                                        return bpf_redirect_map(&xsk_map, ctx->rx_queue_index, 0);
                                     }
 
                                     __sync_fetch_and_add(&entry->misses, 1);
