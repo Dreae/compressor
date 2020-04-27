@@ -20,7 +20,7 @@ root@compressor:~# apt install build-essential clang llvm libconfig-dev libhired
 ```
 Once the dependencies are installed you'll need to clone and build compressor:
 ```bash
-root@compressor:~# git clone https://gitlab.com/Dreae/compressor.git
+root@compressor:~# git clone --recursive https://gitlab.com/Dreae/compressor.git
 root@compressor:~# cd compressor
 root@compressor:~/compressor# make && make install
 ```
