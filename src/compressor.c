@@ -82,8 +82,17 @@ int main(int argc, char **argv) {
             rate_limit = 12000;
             fprintf(stderr, "Warning: no rate limit set; defaulting to 12000\n");
         }
+
+        int tcp_exclude = 0;
+
+        if (config_lookup_int(&config, "tcp_exclude", &tcp_exclude) == CONFIG_FALSE)
+        {
+            tcp_exclude = 0;
+        }
+
         cfg.rate_limit = rate_limit;
         cfg.new_conn_limit = new_conn_limit;
+        cfg.tcp_exclude = tcp_exclude;
 
         int cockpit_enabled = 0;
         config_lookup_bool(&config, "cockpit_enabled", &cockpit_enabled);
