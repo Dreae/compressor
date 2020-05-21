@@ -35,6 +35,7 @@
 #include "bpf_load.h"
 
 static void cleanup_interface(void) {
+    bpf_set_link_xdp_fd(ifindex, -1, XDP_FLAGS_DRV_MODE);
     bpf_set_link_xdp_fd(ifindex, -1, XDP_FLAGS_SKB_MODE);
 }
 
@@ -202,9 +203,13 @@ struct compressor_maps *load_xdp_prog(struct forwarding_rule **forwarding, struc
     signal(SIGKILL, int_exit);
     atexit(cleanup_interface);
 
-    if (bpf_set_link_xdp_fd(ifindex, prog_fd[0], XDP_FLAGS_SKB_MODE) < 0) {
-        fprintf(stderr, "link set xdp failed\n");
-        return 0;
+    if (bpf_set_link_xdp_fd(ifindex, prog_fd[0], XDP_FLAGS_DRV_MODE) < 0) {
+        // Try XDP-generic (SKB-mode).
+        fprintf(stderr, "Didn't work with XDP-native. Trying XDP-generic (SKB mode).\n");
+        if (bpf_set_link_xdp_fd(ifindex, prog_fd[0], XDP_FLAGS_SKB_MODE) < 0) {
+            fprintf(stderr, "link set xdp failed\n");
+            return 0;
+        }
     }
 
     struct compressor_maps *maps = malloc(sizeof(struct compressor_maps));

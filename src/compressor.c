@@ -67,8 +67,8 @@ int main(int argc, char **argv) {
             perror("Error getting interface");
             return 1;
         }
+        bpf_set_link_xdp_fd(ifindex, -1, XDP_FLAGS_DRV_MODE);
         bpf_set_link_xdp_fd(ifindex, -1, XDP_FLAGS_SKB_MODE);
-
 
         struct config cfg = { 0 };
         long long new_conn_limit = 0;
