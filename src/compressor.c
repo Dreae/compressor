@@ -90,9 +90,17 @@ int main(int argc, char **argv) {
             tcp_exclude = 0;
         }
 
+        int force_skb = 0;
+
+        if (config_lookup_int(&config, "force_skb", &force_skb) == CONFIG_FALSE)
+        {
+            force_skb = 0;
+        }
+
         cfg.rate_limit = rate_limit;
         cfg.new_conn_limit = new_conn_limit;
         cfg.tcp_exclude = tcp_exclude;
+        cfg.force_skb = force_skb;
 
         int cockpit_enabled = 0;
         config_lookup_bool(&config, "cockpit_enabled", &cockpit_enabled);

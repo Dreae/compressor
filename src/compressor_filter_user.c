@@ -203,9 +203,18 @@ struct compressor_maps *load_xdp_prog(struct forwarding_rule **forwarding, struc
     signal(SIGKILL, int_exit);
     atexit(cleanup_interface);
 
-    if (bpf_set_link_xdp_fd(ifindex, prog_fd[0], XDP_FLAGS_DRV_MODE) < 0) {
+    if (cfg->force_skb || bpf_set_link_xdp_fd(ifindex, prog_fd[0], XDP_FLAGS_DRV_MODE) < 0) {
         // Try XDP-generic (SKB-mode).
-        fprintf(stderr, "Didn't work with XDP-native. Trying XDP-generic (SKB mode).\n");
+
+        if (cfg->force_skb)
+        {
+            fprintf(stdout, "Ignoring XDP-native (DRV mode).\n");
+        }
+        else
+        {
+            fprintf(stderr, "Didn't work with XDP-native. Trying XDP-generic (SKB mode).\n");
+        }
+        
         if (bpf_set_link_xdp_fd(ifindex, prog_fd[0], XDP_FLAGS_SKB_MODE) < 0) {
             fprintf(stderr, "link set xdp failed\n");
             return 0;
