@@ -54,6 +54,7 @@
 #include "compressor_filter_user.h"
 #include "xassert.h"
 #include "checksum.h"
+#include "config.h"
 
 #ifndef AF_XDP
 #define AF_XDP 44
@@ -447,7 +448,7 @@ struct xdp_umem *xdp_umem_configure(int sfd) {
     return umem;
 }
 
-struct xdp_sock *xsk_configure(struct xdp_umem *umem, int ifindex) {
+struct xdp_sock *xsk_configure(struct xdp_umem *umem, int ifindex, int cpu_id, int *allow) {
     static int ndescs = NUM_DESCS;
 
     struct xdp_sock *xsk = calloc(1, sizeof(struct xdp_sock));
@@ -499,7 +500,7 @@ struct xdp_sock *xsk_configure(struct xdp_umem *umem, int ifindex) {
     struct sockaddr_xdp sxdp = {};
 	sxdp.sxdp_family = AF_XDP;
 	sxdp.sxdp_ifindex = ifindex;
-	sxdp.sxdp_queue_id = 0;
+	sxdp.sxdp_queue_id = cpu_id;
 
 	if (umem) {
 		sxdp.sxdp_flags = XDP_SHARED_UMEM;
@@ -508,21 +509,41 @@ struct xdp_sock *xsk_configure(struct xdp_umem *umem, int ifindex) {
 		sxdp.sxdp_flags = 0;
 	}
 
-	xassert(bind(sfd, (struct sockaddr *)&sxdp, sizeof(sxdp)) == 0);
+	if (bind(sfd, (struct sockaddr *)&sxdp, sizeof(sxdp)) != 0)
+    {
+        *allow = 0;
+    }
 
 	return xsk;
 }
 
-void load_skb_program(const char *ifname, int ifindex, int xsk_map_fd, int a2s_info_cache_map_fd) {
+void load_skb_program(const char *ifname, int ifindex, int xsk_map_fd, int a2s_info_cache_map_fd, struct config *cfg) {
     a2s_cache_map_fd = a2s_info_cache_map_fd;
     xassert(pthread_rwlock_init(&a2s_cache_lock, NULL) == 0);
 
     int num_cpus = get_nprocs_conf();
+
+    // Check for config override.
+    if (cfg->rxqueues > 0) {
+        num_cpus = cfg->rxqueues;
+    }
+
     if (num_cpus > MAX_CPUS) {
         num_cpus = MAX_CPUS;
     }
+
     for (int cpu_id = 0; cpu_id < num_cpus; cpu_id++) {
-        struct xdp_sock *xsk = xsk_configure(NULL, ifindex);
+        int allow = 1;
+        struct xdp_sock *xsk = xsk_configure(NULL, ifindex, cpu_id, &allow);
+
+        if (!allow)
+        {
+            int errnum = errno;
+            fprintf(stdout, "WARNING - Couldn't configure AF_XDP socket for CPU #%d :: %s\n", cpu_id, strerror(errnum));
+
+            continue;
+        }
+
         xassert(bpf_map_update_elem(xsk_map_fd, &cpu_id, &xsk->sfd, BPF_ANY) == 0);
         xsk_cache_run(xsk);
     }

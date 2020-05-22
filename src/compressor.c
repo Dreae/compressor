@@ -90,9 +90,17 @@ int main(int argc, char **argv) {
             tcp_exclude = 0;
         }
 
+        int rxqueues = 0;
+
+        if (config_lookup_int(&config, "rxqueues", &rxqueues) == CONFIG_FALSE)
+        {
+            rxqueues = 0;
+        }
+
         cfg.rate_limit = rate_limit;
         cfg.new_conn_limit = new_conn_limit;
         cfg.tcp_exclude = tcp_exclude;
+        cfg.rxqueues = rxqueues;
 
         int cockpit_enabled = 0;
         config_lookup_bool(&config, "cockpit_enabled", &cockpit_enabled);
@@ -143,7 +151,7 @@ int main(int argc, char **argv) {
             return 1;
         }
 
-        load_skb_program(interface, ifindex, maps->xsk_map_fd, maps->a2s_cache_map_fd);
+        load_skb_program(interface, ifindex, maps->xsk_map_fd, maps->a2s_cache_map_fd, &cfg);
         if (redis_addr && redis_port) {
             start_cache_seeding(maps->a2s_cache_map_fd, forwarding_rules, redis_addr, redis_port);
         }

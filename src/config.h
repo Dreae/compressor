@@ -26,6 +26,7 @@ struct config {
     uint_fast64_t new_conn_limit;
     uint_fast64_t rate_limit;
     uint_fast8_t tcp_exclude;
+    uint16_t rxqueues;
 };
 
 struct forwarding_rule {
