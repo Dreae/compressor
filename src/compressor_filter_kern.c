@@ -461,7 +461,7 @@ int xdp_program(struct xdp_md *ctx) {
                     return forward_packet(ctx, forward_rule, 0x00);
                 }
 
-                return XDP_DROP;
+                return XDP_PASS;
             }
         }
 
